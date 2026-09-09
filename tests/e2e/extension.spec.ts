@@ -139,6 +139,33 @@ test.beforeAll(async () => {
       });
       return;
     }
+    if (url.pathname === "/acceptance") {
+      response.setHeader("content-type", "text/html; charset=utf-8");
+      response.end(`<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Configuration propagation — Docs</title></head>
+  <body>
+    <main>
+      <h1>Configuration propagation</h1>
+      <p>This guide explains how to propagate configuration across services.</p>
+      <p>To invoke the daemon, run the following command:</p>
+      <pre><code>npm run dev</code></pre>
+      <p>Pass a <code>flag</code> to the terminal when you invoke it.</p>
+      <pre>const daemon = new Daemon();</pre>
+      <p>Configuration changes propagate immediately to every open page.</p>
+      <p>State propagation keeps open pages consistent.</p>
+      <ul>
+        <li>Configuration simplifies the setup.</li>
+        <li>Propagation keeps state consistent.</li>
+      </ul>
+      <p id="repeat-copy">A daemon can spawn another daemon.</p>
+      <p id="word-forms">Configuring configured configures.</p>
+      <div id="dynamic-docs"></div>
+    </main>
+  </body>
+</html>`);
+      return;
+    }
     response.setHeader("content-type", "text/html; charset=utf-8");
     response.end(`<!doctype html><html><body>
       <main>
@@ -1101,7 +1128,7 @@ test("shows a clear network error for the LLM and retains the dictionary definit
   });
   await configureDeepSeek(options, {
     apiKey: "sk-test",
-    apiUrl: "http://network-error.invalid/deepseek",
+    apiUrl: "http://127.0.0.1:1/deepseek",
   });
   const dialog = await openQuizzaciousDialog(page, "#static-copy .nbf-potential-word");
   await dialog.getByRole("button", { name: "专业术语翻译" }).click();
@@ -1585,4 +1612,170 @@ test("round-trips learning data through export and import", async ({ context, ex
   expect(storage.vocabBook).toEqual({ quizzacious: { definition: "古怪的", mastered: false } });
   expect(storage.enabledHosts).toEqual(["docs.localhost"]);
   expect(storage.deepseekApiKey).toBe("sk-keep");
+});
+
+test("propagates a newly familiar word to another open page immediately", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId);
+  const other = await context.newPage();
+  await other.goto(`http://docs.localhost:${port}/guide`);
+  await expect(
+    other.locator("#static-copy .nbf-potential-word", { hasText: "Quizzacious" }),
+  ).toHaveCount(2);
+
+  await page
+    .locator("#static-copy .nbf-potential-word", { hasText: "Quizzacious" })
+    .first()
+    .click();
+  await page.getByRole("dialog", { name: "单词详情" }).getByRole("button", { name: "认识" }).click();
+
+  await expect(
+    page.locator("#static-copy .nbf-potential-word", { hasText: "Quizzacious" }),
+  ).toHaveCount(0);
+  await expect(
+    other.locator("#static-copy .nbf-potential-word", { hasText: "Quizzacious" }),
+  ).toHaveCount(0);
+
+  const storage = await readStorage(options);
+  expect(storage.familiarWords).toContain("quizzacious");
+});
+
+test("propagates removing a familiar word to another open page immediately", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId);
+  const other = await context.newPage();
+  await other.goto(`http://docs.localhost:${port}/guide`);
+  await expect(other.locator(".nbf-potential-word", { hasText: /^[Tt]he$/ })).toHaveCount(0);
+
+  await options.getByLabel("搜索熟词").fill("the");
+  const familiarList = options.getByRole("list", { name: "熟词表" });
+  await familiarList.getByRole("button", { name: "移除 the", exact: true }).click();
+
+  await expect(page.locator(".nbf-potential-word", { hasText: /^[Tt]he$/ })).not.toHaveCount(0);
+  await expect(other.locator(".nbf-potential-word", { hasText: /^[Tt]he$/ })).not.toHaveCount(0);
+});
+
+test("propagates disabling a site to an already-open page without reload", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId);
+  await expect(page.locator(".nbf-potential-word")).not.toHaveCount(0);
+
+  await options.getByRole("button", { name: "移除 docs.localhost" }).click();
+
+  await expect(page.locator(".nbf-potential-word")).toHaveCount(0);
+  const storage = await readStorage(options);
+  expect(storage.enabledHosts).toEqual([]);
+});
+
+test("propagates enabling a site to an already-open page without reload", async ({
+  context,
+  extensionId,
+}) => {
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/options.html`);
+
+  const page = await context.newPage();
+  await page.goto(`http://docs.localhost:${port}/guide`);
+  await expect(page.locator(".nbf-potential-word")).toHaveCount(0);
+
+  await options.getByLabel("页面网址").fill(`http://docs.localhost:${port}/guide`);
+  await options.getByRole("button", { name: "启用网站" }).click();
+
+  await expect(page.locator(".nbf-potential-word")).not.toHaveCount(0);
+});
+
+test("completes the final acceptance flow on a GitHub Docs-like page", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: {
+      configuration: "配置",
+      propagate: "传播",
+      daemon: "守护进程",
+      invoke: "调用",
+    },
+  });
+  await configureDeepSeek(options, {
+    apiKey: "sk-acceptance",
+    apiUrl: `http://docs.localhost:${port}/deepseek`,
+  });
+
+  await page.goto(`http://docs.localhost:${port}/acceptance`);
+
+  // 1. Highlights potential words in static body copy and skips code regions.
+  await expect(
+    page.locator(".nbf-potential-word", { hasText: "Configuration" }),
+  ).not.toHaveCount(0);
+  await expect(page.locator(".nbf-potential-word", { hasText: /^[Dd]aemon$/ })).not.toHaveCount(0);
+  await expect(page.locator("pre .nbf-potential-word")).toHaveCount(0);
+  await expect(page.locator("code .nbf-potential-word")).toHaveCount(0);
+
+  // Repeated words are highlighted on every occurrence.
+  await expect(
+    page.locator("#repeat-copy .nbf-potential-word", { hasText: /^daemon$/i }),
+  ).toHaveCount(2);
+  // Inflected forms are highlighted and share one lemma.
+  await expect(page.locator("#word-forms .nbf-potential-word")).toHaveCount(3);
+
+  // 2. Highlights dynamically inserted content.
+  await page.locator("#dynamic-docs").evaluate((element) => {
+    element.textContent = "Configuration appears dynamically.";
+  });
+  await expect(
+    page.locator("#dynamic-docs .nbf-potential-word", { hasText: "Configuration" }),
+  ).toHaveCount(1);
+
+  // 3. Shows the dictionary translation for a potential word.
+  await page.locator(".nbf-potential-word", { hasText: "Configuration" }).first().click();
+  const dialog = page.getByRole("dialog", { name: "单词详情" });
+  await expect(dialog).toContainText("配置");
+  await expect(dialog).toContainText("按 configuration 管理");
+
+  // 4. Marks it familiar: un-highlights now and persists after refresh.
+  await dialog.getByRole("button", { name: "认识" }).click();
+  await expect(page.locator(".nbf-potential-word", { hasText: "Configuration" })).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator(".nbf-potential-word", { hasText: "Configuration" })).toHaveCount(0);
+  await expect(page.locator(".nbf-potential-word", { hasText: /^[Dd]aemon$/ })).not.toHaveCount(0);
+
+  // 5. Collects a word with a valid definition into the vocab book.
+  await page.locator(".nbf-potential-word", { hasText: /^[Dd]aemon$/ }).first().click();
+  await page
+    .getByRole("dialog", { name: "单词详情" })
+    .getByRole("button", { name: "加入生词本" })
+    .click();
+  const storage = await readStorage(options);
+  expect(storage.vocabBook).toEqual({ daemon: { definition: "守护进程", mastered: false } });
+
+  // 6. Translates a selected multi-word term through the LLM test double.
+  await page.keyboard.press("Escape");
+  await selectPhrase(page, "main", "State propagation");
+  await page.getByRole("button", { name: "翻译所选短语" }).click();
+  const phraseDialog = page.getByRole("dialog", { name: "短语详情" });
+  await expect(phraseDialog).toContainText("State propagation");
+  await phraseDialog.getByRole("button", { name: "专业术语翻译" }).click();
+  await expect(phraseDialog).toContainText("术语译文");
+  expect(deepseekCalls).toHaveLength(1);
+
+  // 7. Manages the collected word in the vocab book on the options page.
+  await options.reload();
+  const vocabList = options.getByRole("list", { name: "生词本" });
+  await expect(vocabList.getByText("daemon", { exact: true })).toBeVisible();
+  await expect(vocabList.getByText("守护进程", { exact: true })).toBeVisible();
+  await expect(vocabList.getByText("未掌握", { exact: true })).toBeVisible();
+
+  // 8. Exports the accumulated learning data for the round-trip.
+  const backup = await downloadBackupJson(options);
+  expect(backup.version).toBe(1);
+  expect(backup.enabledHosts).toEqual(["docs.localhost"]);
+  expect(backup.vocabBook).toEqual({ daemon: { definition: "守护进程", mastered: false } });
+  expect(backup.familiarWords).toContain("configuration");
+  expect(backup).not.toHaveProperty("deepseekApiKey");
 });

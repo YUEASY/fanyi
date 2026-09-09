@@ -163,15 +163,17 @@ function highlightPotentialWordsIn(root, familiarWords, lexicon) {
   }
 }
 
-function observeDynamicText(familiarWords, lexicon) {
+function observeDynamicText() {
   const observer = new MutationObserver((mutations) => {
+    const state = scanState;
+    if (!state) return;
     for (const mutation of mutations) {
       if (mutation.type === "characterData") {
-        highlightPotentialWordsIn(mutation.target, familiarWords, lexicon);
+        highlightPotentialWordsIn(mutation.target, state.familiarWords, state.lexicon);
         continue;
       }
       for (const node of mutation.addedNodes) {
-        highlightPotentialWordsIn(node, familiarWords, lexicon);
+        highlightPotentialWordsIn(node, state.familiarWords, state.lexicon);
       }
     }
   });
@@ -513,7 +515,7 @@ async function translateViaLlm(target, sentence, area, onResult) {
   }
 }
 
-function showWordPopover(marker, familiarWords) {
+function showWordPopover(marker) {
   if (document.querySelector(".nbf-phrase-popover")) return;
   const lemma = marker.dataset.lemma;
   if (!lemma) return;
@@ -610,10 +612,8 @@ function showWordPopover(marker, familiarWords) {
       update.vocabBook = stored.vocabBook;
     }
     await chrome.storage.local.set(update);
-    familiarWords.add(lemma);
-    for (const match of document.querySelectorAll(".nbf-potential-word")) {
-      if (match.dataset.lemma === lemma) match.replaceWith(match.textContent ?? "");
-    }
+    scanState?.familiarWords.add(lemma);
+    replaceMarkers((marker) => marker.dataset.lemma === lemma);
     closeWordPopover();
   });
 
@@ -668,7 +668,7 @@ function schedulePopoverClose() {
   }, 250);
 }
 
-function listenForWordInteractions(familiarWords) {
+function listenForWordInteractions() {
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     cancelPopoverClose();
@@ -685,7 +685,7 @@ function listenForWordInteractions(familiarWords) {
     const marker = target.closest?.(".nbf-potential-word");
     if (marker) {
       cancelPopoverClose();
-      showWordPopover(marker, familiarWords);
+      showWordPopover(marker);
     }
   });
 
@@ -699,7 +699,7 @@ function listenForWordInteractions(familiarWords) {
 
   document.addEventListener("click", (event) => {
     const marker = event.target.closest?.(".nbf-potential-word");
-    if (marker) showWordPopover(marker, familiarWords);
+    if (marker) showWordPopover(marker);
   });
 }
 
@@ -813,6 +813,10 @@ function showPhraseButton(selection) {
 }
 
 function updatePhraseButton() {
+  if (!scanState) {
+    hidePhraseButton();
+    return;
+  }
   const selection = getSelectedPhrase();
   if (!selection) {
     hidePhraseButton();
@@ -825,21 +829,94 @@ function listenForPhraseSelection() {
   document.addEventListener("selectionchange", updatePhraseButton);
 }
 
-async function highlightPotentialWordsOnEnabledSite() {
-  const { enabledHosts } = await chrome.storage.local.get({ enabledHosts: [] });
-  if (!enabledHosts.includes(location.hostname.toLowerCase())) return;
+let scanState = null;
+let listenersInstalled = false;
+let scanGeneration = 0;
 
+function normalizeFamiliarWords(storedFamiliarWords, lexicon) {
+  return new Set([...storedFamiliarWords].map((word) => getLemma(word, lexicon)));
+}
+
+function replaceMarkers(predicate) {
+  for (const marker of document.querySelectorAll(".nbf-potential-word")) {
+    if (predicate(marker)) marker.replaceWith(marker.textContent ?? "");
+  }
+}
+
+function removeFamiliarMarkers(familiarWords) {
+  replaceMarkers((marker) => familiarWords.has(marker.dataset.lemma));
+  if (familiarWords.has(openLemma)) closeWordPopover();
+}
+
+function clearHighlights() {
+  replaceMarkers(() => true);
+  closeWordPopover();
+  closePhrasePopover();
+  hidePhraseButton();
+}
+
+function stopScanning() {
+  scanGeneration += 1;
+  if (!scanState) return;
+  scanState = null;
+  clearHighlights();
+}
+
+async function startScanning() {
+  if (scanState) return;
+  const generation = ++scanGeneration;
   const bundledWords = await loadBundledWordList();
   const lexicon = new Set(bundledWords);
   const storedFamiliarWords = await getFamiliarWords(bundledWords);
-  const familiarWords = new Set(
-    [...storedFamiliarWords].map((word) => getLemma(word, lexicon)),
-  );
-  await chrome.storage.local.set({ familiarWords: [...familiarWords] });
-  highlightPotentialWordsIn(document.body, familiarWords, lexicon);
-  observeDynamicText(familiarWords, lexicon);
-  listenForWordInteractions(familiarWords);
-  listenForPhraseSelection();
+  const familiarWords = normalizeFamiliarWords(storedFamiliarWords, lexicon);
+  if (generation !== scanGeneration) return;
+  const normalized = [...familiarWords];
+  const stored = [...storedFamiliarWords];
+  if (stored.length !== normalized.length || stored.some((word, index) => word !== normalized[index])) {
+    await chrome.storage.local.set({ familiarWords: normalized });
+  }
+  if (generation !== scanGeneration) return;
+  scanState = { familiarWords, lexicon };
+  highlightPotentialWordsIn(document.body, scanState.familiarWords, scanState.lexicon);
+  if (!listenersInstalled) {
+    listenersInstalled = true;
+    observeDynamicText();
+    listenForWordInteractions();
+    listenForPhraseSelection();
+  }
 }
+
+async function highlightPotentialWordsOnEnabledSite() {
+  const { enabledHosts } = await chrome.storage.local.get({ enabledHosts: [] });
+  if (!enabledHosts.includes(location.hostname.toLowerCase())) return;
+  await startScanning();
+}
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local") return;
+
+  if (changes.familiarWords && scanState) {
+    const previousFamiliarWords = scanState.familiarWords;
+    const familiarWords = normalizeFamiliarWords(
+      changes.familiarWords.newValue ?? [],
+      scanState.lexicon,
+    );
+    scanState.familiarWords = familiarWords;
+    removeFamiliarMarkers(familiarWords);
+    const hasRemoval = [...previousFamiliarWords].some((word) => !familiarWords.has(word));
+    if (hasRemoval) {
+      highlightPotentialWordsIn(document.body, familiarWords, scanState.lexicon);
+    }
+  }
+
+  if (changes.enabledHosts) {
+    const enabledHosts = changes.enabledHosts.newValue ?? [];
+    if (enabledHosts.includes(location.hostname.toLowerCase())) {
+      void startScanning();
+    } else {
+      stopScanning();
+    }
+  }
+});
 
 void highlightPotentialWordsOnEnabledSite();
