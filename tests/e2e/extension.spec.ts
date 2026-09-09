@@ -1,4 +1,4 @@
-import { test as base, chromium, expect, type BrowserContext } from "@playwright/test";
+import { test as base, chromium, expect, type BrowserContext, type Page } from "@playwright/test";
 import { createServer, type Server } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -41,9 +41,38 @@ const test = base.extend<{
 
 let server: Server;
 let port: number;
+let onlineDictionaryCalls: string[] = [];
+let onlineDictionaryStatus = 200;
+let onlineDictionaryDefinitions: Record<string, string> = {};
+
+test.beforeEach(() => {
+  onlineDictionaryCalls = [];
+  onlineDictionaryStatus = 200;
+  onlineDictionaryDefinitions = {};
+});
 
 test.beforeAll(async () => {
-  server = createServer((_request, response) => {
+  server = createServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://docs.localhost");
+    if (url.pathname === "/dictionary") {
+      const word = url.searchParams.get("q") ?? "";
+      onlineDictionaryCalls.push(word);
+      const status = onlineDictionaryStatus;
+      if (status !== 200) {
+        response.statusCode = status;
+        response.setHeader("content-type", "application/json; charset=utf-8");
+        response.end(JSON.stringify({ error: `HTTP ${status}` }));
+        return;
+      }
+      response.setHeader("content-type", "application/json; charset=utf-8");
+      response.end(
+        JSON.stringify({
+          responseData: { translatedText: onlineDictionaryDefinitions[word] ?? "" },
+          responseStatus: 200,
+        }),
+      );
+      return;
+    }
     response.setHeader("content-type", "text/html; charset=utf-8");
     response.end(`<!doctype html><html><body>
       <main>
@@ -78,11 +107,46 @@ test.afterAll(async () => {
   );
 });
 
-async function enableDocsHostAndOpenPage(context: BrowserContext, extensionId: string) {
+type DictionaryConfig = {
+  localDictionary?: Record<string, string> | null;
+  onlineDictionaryUrl?: string;
+};
+
+async function readStorage(options: Page) {
+  return options.evaluate(async () => {
+    const extensionGlobal = globalThis as typeof globalThis & {
+      chrome: { storage: { local: { get(): Promise<Record<string, unknown>> } } };
+    };
+    return extensionGlobal.chrome.storage.local.get();
+  });
+}
+
+async function enableDocsHostAndOpenPage(
+  context: BrowserContext,
+  extensionId: string,
+  dictionaryConfig: DictionaryConfig = {},
+) {
   const options = await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/options.html`);
   await options.getByLabel("页面网址").fill(`http://docs.localhost:${port}/guide`);
   await options.getByRole("button", { name: "启用网站" }).click();
+  await options.evaluate(
+    async (config) => {
+      const extensionGlobal = globalThis as typeof globalThis & {
+        chrome: { storage: { local: { set(value: Record<string, unknown>): Promise<void> } } };
+      };
+      const update: Record<string, unknown> = {
+        onlineDictionaryUrl: config.onlineDictionaryUrl,
+      };
+      if (config.localDictionary) update.localDictionary = config.localDictionary;
+      await extensionGlobal.chrome.storage.local.set(update);
+    },
+    {
+      onlineDictionaryUrl:
+        dictionaryConfig.onlineDictionaryUrl ?? `http://docs.localhost:${port}/dictionary`,
+      localDictionary: dictionaryConfig.localDictionary ?? null,
+    },
+  );
   const page = await context.newPage();
   await page.goto(`http://docs.localhost:${port}/guide`);
   return { options, page };
@@ -244,6 +308,8 @@ test("marks a reliable lemma as familiar from its word popover", async ({
   await expect(page.getByRole("dialog", { name: "单词详情" })).toContainText(
     "按 quizzacious 管理",
   );
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "单词详情" })).toHaveCount(0);
   await forms.filter({ hasText: "Working" }).click();
   const popover = page.getByRole("dialog", { name: "单词详情" });
   await expect(popover).toContainText("按 work 管理");
@@ -265,4 +331,112 @@ test("marks a reliable lemma as familiar from its word popover", async ({
     await page.locator("#ambiguous-forms").getByText(form, { exact: true }).click();
     await expect(page.getByRole("dialog", { name: "单词详情" })).toContainText(`按 ${lemma} 管理`);
   }
+});
+
+test("hovers a potential word to show a local definition without writing data or calling online", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: { quizzacious: "古怪的" },
+  });
+  await expect(page.locator(".nbf-potential-word")).not.toHaveCount(0);
+  const storageBefore = await readStorage(options);
+
+  await page
+    .locator("#static-copy .nbf-potential-word", { hasText: "Quizzacious" })
+    .first()
+    .hover();
+  const dialog = page.getByRole("dialog", { name: "单词详情" });
+  await expect(dialog).toContainText("古怪的");
+  await expect(dialog).toContainText("按 quizzacious 管理");
+  expect(onlineDictionaryCalls).toEqual([]);
+  expect(await readStorage(options)).toEqual(storageBefore);
+});
+
+test("falls back to the online dictionary when the local dictionary misses", async ({
+  context,
+  extensionId,
+}) => {
+  onlineDictionaryDefinitions = { quizzacious: "古怪的（在线）" };
+  const { page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: {},
+  });
+  await expect(page.locator(".nbf-potential-word")).not.toHaveCount(0);
+
+  await page
+    .locator("#static-copy .nbf-potential-word", { hasText: "Quizzacious" })
+    .first()
+    .hover();
+  await expect(page.getByRole("dialog", { name: "单词详情" })).toContainText(
+    "古怪的（在线）",
+  );
+  expect(onlineDictionaryCalls).toEqual(["quizzacious"]);
+});
+
+test("shows 未找到释义 when neither dictionary has the word", async ({
+  context,
+  extensionId,
+}) => {
+  const { page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: {},
+  });
+  await expect(page.locator(".nbf-potential-word")).not.toHaveCount(0);
+
+  await page
+    .locator("#static-copy .nbf-potential-word", { hasText: "Quizzacious" })
+    .first()
+    .hover();
+  await expect(page.getByRole("dialog", { name: "单词详情" })).toContainText("未找到释义");
+  expect(onlineDictionaryCalls).toEqual(["quizzacious"]);
+});
+
+test("shows a clear service failure and retries only when the user clicks retry", async ({
+  context,
+  extensionId,
+}) => {
+  onlineDictionaryStatus = 500;
+  const { page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: {},
+  });
+  await expect(page.locator(".nbf-potential-word")).not.toHaveCount(0);
+
+  await page
+    .locator("#static-copy .nbf-potential-word", { hasText: "Quizzacious" })
+    .first()
+    .hover();
+  const dialog = page.getByRole("dialog", { name: "单词详情" });
+  await expect(dialog).toContainText("在线词典返回 HTTP 500");
+  const retry = dialog.getByRole("button", { name: "重试" });
+  await expect(retry).toBeVisible();
+  expect(onlineDictionaryCalls).toEqual(["quizzacious"]);
+
+  await page.waitForTimeout(500);
+  expect(onlineDictionaryCalls).toEqual(["quizzacious"]);
+
+  onlineDictionaryStatus = 200;
+  onlineDictionaryDefinitions = { quizzacious: "古怪的（重试成功）" };
+  await retry.click();
+  await expect(dialog).toContainText("古怪的（重试成功）");
+  expect(onlineDictionaryCalls).toEqual(["quizzacious", "quizzacious"]);
+});
+
+test("shows a clear network failure and still offers retry", async ({ context, extensionId }) => {
+  const { page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: {},
+    onlineDictionaryUrl: "http://network-error.invalid/dictionary",
+  });
+  await expect(page.locator(".nbf-potential-word")).not.toHaveCount(0);
+
+  await page
+    .locator("#static-copy .nbf-potential-word", { hasText: "Quizzacious" })
+    .first()
+    .hover();
+  const dialog = page.getByRole("dialog", { name: "单词详情" });
+  await expect(dialog).toContainText("网络错误，请检查网络连接");
+  const retry = dialog.getByRole("button", { name: "重试" });
+  await expect(retry).toBeVisible();
+
+  await retry.click();
+  await expect(dialog).toContainText("网络错误，请检查网络连接");
 });

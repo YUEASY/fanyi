@@ -207,17 +207,159 @@ async function getFamiliarWords(bundledWords) {
   return new Set(familiarWords);
 }
 
+const DEFAULT_ONLINE_DICTIONARY_URL = "https://api.mymemory.translated.net/get";
+const definitionCache = new Map();
+let localDictionaryPromise = null;
+let onlineDictionaryUrlPromise = null;
+
+function loadLocalDictionary() {
+  if (!localDictionaryPromise) {
+    localDictionaryPromise = chrome.storage.local
+      .get("localDictionary")
+      .then(async ({ localDictionary }) => {
+        if (
+          localDictionary &&
+          typeof localDictionary === "object" &&
+          !Array.isArray(localDictionary)
+        ) {
+          return localDictionary;
+        }
+        const response = await fetch(chrome.runtime.getURL("local-dictionary.json"));
+        if (!response.ok) throw new Error("无法加载本地词典");
+        return response.json();
+      });
+  }
+  return localDictionaryPromise;
+}
+
+function getOnlineDictionaryUrl() {
+  if (!onlineDictionaryUrlPromise) {
+    onlineDictionaryUrlPromise = chrome.storage.local
+      .get("onlineDictionaryUrl")
+      .then(({ onlineDictionaryUrl }) => onlineDictionaryUrl || DEFAULT_ONLINE_DICTIONARY_URL);
+  }
+  return onlineDictionaryUrlPromise;
+}
+
+async function fetchOnlineDefinition(lemma) {
+  const baseUrl = await getOnlineDictionaryUrl();
+  let url;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    throw new Error("在线词典地址无效");
+  }
+  url.searchParams.set("q", lemma);
+  url.searchParams.set("langpair", "en|zh-CN");
+  let response;
+  try {
+    response = await fetch(url.toString());
+  } catch {
+    throw new Error("网络错误，请检查网络连接");
+  }
+  if (!response.ok) throw new Error(`在线词典返回 HTTP ${response.status}`);
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error("在线词典响应无法解析");
+  }
+  const definition = data?.responseData?.translatedText;
+  return typeof definition === "string" && definition.trim() ? definition.trim() : null;
+}
+
+async function lookupDefinition(lemma) {
+  const cached = definitionCache.get(lemma);
+  if (cached) return cached;
+
+  const localDictionary = await loadLocalDictionary();
+  const local = localDictionary[lemma];
+  if (typeof local === "string" && local.trim()) {
+    definitionCache.set(lemma, local.trim());
+    return local.trim();
+  }
+
+  const online = await fetchOnlineDefinition(lemma);
+  if (online) definitionCache.set(lemma, online);
+  return online;
+}
+
+let popoverCloseTimer = null;
+let openLemma = null;
+
+function positionPopover(popover, marker) {
+  const rect = marker.getBoundingClientRect();
+  const gap = 6;
+  const viewportWidth = document.documentElement.clientWidth;
+  const viewportHeight = document.documentElement.clientHeight;
+  const width = popover.offsetWidth;
+  const height = popover.offsetHeight;
+  let left = rect.left;
+  if (left + width > viewportWidth - 8) left = Math.max(8, viewportWidth - width - 8);
+  let top = rect.bottom + gap;
+  if (top + height > viewportHeight - 8) top = Math.max(8, rect.top - height - gap);
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+}
+
+function renderLoadingDefinition(definitionArea) {
+  definitionArea.replaceChildren();
+  const loading = document.createElement("p");
+  loading.className = "nbf-definition";
+  loading.textContent = "查询中…";
+  definitionArea.append(loading);
+  return loading;
+}
+
+async function renderDefinitionResult(definitionArea, lemma, loading) {
+  try {
+    const definition = await lookupDefinition(lemma);
+    if (!definitionArea.isConnected) return;
+    if (definition) loading.textContent = definition;
+    else loading.textContent = "未找到释义";
+  } catch (error) {
+    if (!definitionArea.isConnected) return;
+    renderDefinitionError(definitionArea, lemma, error);
+  }
+}
+
+function renderDefinitionError(definitionArea, lemma, error) {
+  definitionArea.replaceChildren();
+  const reason = document.createElement("p");
+  reason.className = "nbf-definition-error";
+  reason.textContent = error?.message ?? "查询失败，请稍后重试";
+  const retryButton = document.createElement("button");
+  retryButton.type = "button";
+  retryButton.textContent = "重试";
+  retryButton.addEventListener("click", () => {
+    const loading = renderLoadingDefinition(definitionArea);
+    void renderDefinitionResult(definitionArea, lemma, loading);
+  });
+  definitionArea.append(reason, retryButton);
+}
+
 function showWordPopover(marker, familiarWords) {
-  document.querySelector(".nbf-word-popover")?.remove();
   const lemma = marker.dataset.lemma;
   if (!lemma) return;
+  if (openLemma === lemma && document.querySelector(".nbf-word-popover")) return;
+  document.querySelector(".nbf-word-popover")?.remove();
+  openLemma = lemma;
 
   const popover = document.createElement("div");
   popover.className = "nbf-word-popover";
   popover.setAttribute("role", "dialog");
   popover.setAttribute("aria-label", "单词详情");
 
+  const word = document.createElement("p");
+  word.className = "nbf-popover-word";
+  word.textContent = lemma;
+
+  const definitionArea = document.createElement("div");
+  definitionArea.className = "nbf-definition-area";
+  const definition = renderLoadingDefinition(definitionArea);
+
   const managedAs = document.createElement("p");
+  managedAs.className = "nbf-managed-as";
   managedAs.textContent = `按 ${lemma} 管理`;
   const familiarButton = document.createElement("button");
   familiarButton.type = "button";
@@ -230,13 +372,63 @@ function showWordPopover(marker, familiarWords) {
     for (const match of document.querySelectorAll(".nbf-potential-word")) {
       if (match.dataset.lemma === lemma) match.replaceWith(match.textContent ?? "");
     }
-    popover.remove();
+    closeWordPopover();
   });
-  popover.append(managedAs, familiarButton);
+
+  popover.append(word, definitionArea, managedAs, familiarButton);
   document.body.append(popover);
+  positionPopover(popover, marker);
+
+  void renderDefinitionResult(definitionArea, lemma, definition);
 }
 
-function listenForWordClicks(familiarWords) {
+function cancelPopoverClose() {
+  if (popoverCloseTimer) {
+    clearTimeout(popoverCloseTimer);
+    popoverCloseTimer = null;
+  }
+}
+
+function closeWordPopover() {
+  document.querySelector(".nbf-word-popover")?.remove();
+  openLemma = null;
+}
+
+function schedulePopoverClose() {
+  cancelPopoverClose();
+  popoverCloseTimer = setTimeout(() => {
+    popoverCloseTimer = null;
+    closeWordPopover();
+  }, 250);
+}
+
+function listenForWordInteractions(familiarWords) {
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    cancelPopoverClose();
+    closeWordPopover();
+  });
+
+  document.addEventListener("mouseover", (event) => {
+    const target = event.target;
+    if (target.closest?.(".nbf-word-popover")) {
+      cancelPopoverClose();
+      return;
+    }
+    const marker = target.closest?.(".nbf-potential-word");
+    if (marker) {
+      cancelPopoverClose();
+      showWordPopover(marker, familiarWords);
+    }
+  });
+
+  document.addEventListener("mouseout", (event) => {
+    const target = event.target;
+    if (target.closest?.(".nbf-potential-word") || target.closest?.(".nbf-word-popover")) {
+      schedulePopoverClose();
+    }
+  });
+
   document.addEventListener("click", (event) => {
     const marker = event.target.closest?.(".nbf-potential-word");
     if (marker) showWordPopover(marker, familiarWords);
@@ -256,7 +448,7 @@ async function highlightPotentialWordsOnEnabledSite() {
   await chrome.storage.local.set({ familiarWords: [...familiarWords] });
   highlightPotentialWordsIn(document.body, familiarWords, lexicon);
   observeDynamicText(familiarWords, lexicon);
-  listenForWordClicks(familiarWords);
+  listenForWordInteractions(familiarWords);
 }
 
 void highlightPotentialWordsOnEnabledSite();

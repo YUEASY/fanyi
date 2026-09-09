@@ -23,7 +23,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["google-10000-english.txt"],
+      "resources": ["google-10000-english.txt", "local-dictionary.json"],
       "matches": ["<all_urls>"]
     }
   ]

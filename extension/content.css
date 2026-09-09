@@ -9,10 +9,9 @@
 .nbf-word-popover {
   position: fixed;
   z-index: 2147483647;
-  top: 16px;
-  right: 16px;
-  min-width: 180px;
-  padding: 16px;
+  min-width: 200px;
+  max-width: 320px;
+  padding: 12px 14px;
   border: 1px solid #d8d8d8;
   border-radius: 8px;
   background: #fff;
@@ -22,7 +21,25 @@
 }
 
 .nbf-word-popover p {
-  margin: 0 0 12px;
+  margin: 0 0 8px;
+}
+
+.nbf-word-popover p:last-child {
+  margin-bottom: 0;
+}
+
+.nbf-popover-word {
+  font-weight: 600;
+  color: #1a73e8;
+}
+
+.nbf-definition {
+  white-space: pre-wrap;
+}
+
+.nbf-definition-error {
+  color: #c5221f;
+  white-space: pre-wrap;
 }
 
 .nbf-word-popover button {
@@ -32,4 +49,10 @@
   background: #1a73e8;
   color: #fff;
   cursor: pointer;
+}
+
+.nbf-definition-error + button {
+  background: #fff;
+  color: #1a73e8;
+  border: 1px solid #dadce0;
 }
