@@ -1,0 +1,57 @@
+:root {
+  color-scheme: light;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  background: #f7f8fa;
+  color: #202124;
+  margin: 0;
+  min-width: 360px;
+}
+
+main {
+  margin: 0 auto;
+  max-width: 640px;
+  padding: 24px;
+}
+
+h1 {
+  font-size: 20px;
+  margin-top: 0;
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.controls {
+  display: flex;
+  gap: 8px;
+}
+
+input {
+  border: 1px solid #bdc1c6;
+  border-radius: 6px;
+  flex: 1;
+  padding: 9px 10px;
+}
+
+button {
+  background: #1a73e8;
+  border: 0;
+  border-radius: 6px;
+  color: white;
+  cursor: pointer;
+  padding: 9px 14px;
+}
+
+#error {
+  color: #b3261e;
+}
+
+#enabled-hosts {
+  padding-left: 20px;
+}

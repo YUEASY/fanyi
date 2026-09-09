@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "牛逼翻译",
+  "version": "0.1.0",
+  "description": "在已启用的英文技术网站上标记潜在生词。",
+  "permissions": ["storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_page": "options.html",
+  "action": {
+    "default_title": "牛逼翻译",
+    "default_popup": "options.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["google-10000-english.txt"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
