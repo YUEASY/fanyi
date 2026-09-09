@@ -606,3 +606,150 @@ test("marking a word familiar does not create a vocab book entry", async ({
   const storage = await readStorage(options);
   expect(storage).not.toHaveProperty("vocabBook");
 });
+
+test("removes an enabled website so its domain is no longer scanned or highlighted", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId);
+  await expect(page.locator(".nbf-potential-word")).not.toHaveCount(0);
+
+  await options.getByRole("button", { name: "移除 docs.localhost" }).click();
+  await expect(options.getByText("docs.localhost", { exact: true })).toHaveCount(0);
+
+  await page.reload();
+  await expect(page.locator(".nbf-potential-word")).toHaveCount(0);
+
+  const storage = await readStorage(options);
+  expect(storage.enabledHosts).toEqual([]);
+});
+
+test("lists vocab book entries with definition and mastery status, and supports search and filter", async ({
+  context,
+  extensionId,
+}) => {
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/options.html`);
+  await options.evaluate(async () => {
+    const extensionGlobal = globalThis as typeof globalThis & {
+      chrome: { storage: { local: { set(value: Record<string, unknown>): Promise<void> } } };
+    };
+    await extensionGlobal.chrome.storage.local.set({
+      vocabBook: {
+        quizzacious: { definition: "古怪的", mastered: false },
+        work: { definition: "工作", mastered: true },
+      },
+      familiarWords: ["work"],
+    });
+  });
+  await options.reload();
+
+  const vocabList = options.getByRole("list", { name: "生词本" });
+  await expect(vocabList.getByText("quizzacious", { exact: true })).toBeVisible();
+  await expect(vocabList.getByText("古怪的", { exact: true })).toBeVisible();
+  await expect(vocabList.getByText("未掌握", { exact: true })).toBeVisible();
+  await expect(vocabList.getByText("work", { exact: true })).toBeVisible();
+  await expect(vocabList.getByText("工作", { exact: true })).toBeVisible();
+  await expect(vocabList.getByText("已掌握", { exact: true })).toBeVisible();
+
+  await options.getByLabel("搜索生词").fill("quizz");
+  await expect(vocabList.getByText("quizzacious", { exact: true })).toBeVisible();
+  await expect(vocabList.getByText("work", { exact: true })).toHaveCount(0);
+
+  await options.getByLabel("搜索生词").fill("");
+  await options.getByRole("radio", { name: "已掌握" }).check();
+  await expect(vocabList.getByText("work", { exact: true })).toBeVisible();
+  await expect(vocabList.getByText("quizzacious", { exact: true })).toHaveCount(0);
+});
+
+test("toggles mastery in the vocab book and syncs the familiar words list", async ({
+  context,
+  extensionId,
+}) => {
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/options.html`);
+  await options.evaluate(async () => {
+    const extensionGlobal = globalThis as typeof globalThis & {
+      chrome: { storage: { local: { set(value: Record<string, unknown>): Promise<void> } } };
+    };
+    await extensionGlobal.chrome.storage.local.set({
+      vocabBook: { quizzacious: { definition: "古怪的", mastered: false } },
+      familiarWords: [],
+    });
+  });
+  await options.reload();
+
+  const vocabList = options.getByRole("list", { name: "生词本" });
+  await expect(vocabList.getByText("未掌握", { exact: true })).toBeVisible();
+
+  await vocabList.getByRole("button", { name: "标记已掌握" }).click();
+  await expect(vocabList.getByText("已掌握", { exact: true })).toBeVisible();
+  let storage = await readStorage(options);
+  expect(storage.vocabBook).toEqual({ quizzacious: { definition: "古怪的", mastered: true } });
+  expect(storage.familiarWords).toContain("quizzacious");
+
+  await vocabList.getByRole("button", { name: "标记未掌握" }).click();
+  await expect(vocabList.getByText("未掌握", { exact: true })).toBeVisible();
+  storage = await readStorage(options);
+  expect(storage.vocabBook).toEqual({ quizzacious: { definition: "古怪的", mastered: false } });
+  expect(storage.familiarWords).not.toContain("quizzacious");
+});
+
+test("deleting a vocab book entry cancels collection without changing familiar status", async ({
+  context,
+  extensionId,
+}) => {
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/options.html`);
+  await options.evaluate(async () => {
+    const extensionGlobal = globalThis as typeof globalThis & {
+      chrome: { storage: { local: { set(value: Record<string, unknown>): Promise<void> } } };
+    };
+    await extensionGlobal.chrome.storage.local.set({
+      vocabBook: { work: { definition: "工作", mastered: true } },
+      familiarWords: ["work"],
+    });
+  });
+  await options.reload();
+
+  const vocabList = options.getByRole("list", { name: "生词本" });
+  await vocabList.getByRole("button", { name: "删除 work" }).click();
+  await expect(vocabList.getByText("work", { exact: true })).toHaveCount(0);
+
+  const storage = await readStorage(options);
+  expect(storage.vocabBook).toEqual({});
+  expect(storage.familiarWords).toContain("work");
+});
+
+test("marking a collected word familiar syncs its mastery status", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: { quizzacious: "古怪的" },
+  });
+  await page
+    .locator("#static-copy .nbf-potential-word", { hasText: "Quizzacious" })
+    .first()
+    .hover();
+  await page
+    .getByRole("dialog", { name: "单词详情" })
+    .getByRole("button", { name: "加入生词本" })
+    .click();
+  await page.keyboard.press("Escape");
+
+  await page
+    .locator("#static-copy .nbf-potential-word", { hasText: "Quizzacious" })
+    .first()
+    .click();
+  await page
+    .getByRole("dialog", { name: "单词详情" })
+    .getByRole("button", { name: "认识" })
+    .click();
+
+  const storage = await readStorage(options);
+  expect(storage.vocabBook).toEqual({
+    quizzacious: { definition: "古怪的", mastered: true },
+  });
+  expect(storage.familiarWords).toContain("quizzacious");
+});

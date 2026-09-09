@@ -25,6 +25,19 @@
         <input id="familiar-search" type="search" autocomplete="off" />
         <ul id="familiar-words" aria-label="熟词表"></ul>
       </section>
+
+      <section aria-labelledby="vocab-heading">
+        <h2 id="vocab-heading">生词本</h2>
+        <label for="vocab-search">搜索生词</label>
+        <input id="vocab-search" type="search" autocomplete="off" />
+        <fieldset class="mastery-filter">
+          <legend>掌握状态</legend>
+          <label><input type="radio" name="mastery-filter" value="all" checked />全部</label>
+          <label><input type="radio" name="mastery-filter" value="mastered" />已掌握</label>
+          <label><input type="radio" name="mastery-filter" value="unmastered" />未掌握</label>
+        </fieldset>
+        <ul id="vocab-book" aria-label="生词本"></ul>
+      </section>
     </main>
     <script src="options.js"></script>
   </body>

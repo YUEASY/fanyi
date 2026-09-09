@@ -61,20 +61,69 @@ button {
   padding-left: 20px;
 }
 
-#familiar-search {
+#enabled-hosts li {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 6px 0;
+}
+
+#familiar-search,
+#vocab-search {
   box-sizing: border-box;
   width: 100%;
 }
 
-#familiar-words {
+#familiar-words,
+#vocab-book {
   max-height: 320px;
   overflow: auto;
   padding: 0;
 }
 
-#familiar-words li {
+#familiar-words li,
+#vocab-book li {
   align-items: center;
   display: flex;
+  gap: 12px;
   justify-content: space-between;
   padding: 6px 0;
+}
+
+.mastery-filter {
+  border: 0;
+  margin: 12px 0;
+  padding: 0;
+}
+
+.mastery-filter legend {
+  font-weight: 600;
+  padding: 0;
+}
+
+.mastery-filter label {
+  display: inline;
+  font-weight: 400;
+  margin: 0 12px 0 0;
+}
+
+.mastery-filter input {
+  flex: none;
+  margin-right: 4px;
+  width: auto;
+}
+
+.vocab-word {
+  font-weight: 600;
+}
+
+.vocab-definition {
+  color: #5f6368;
+  flex: 1;
+}
+
+.vocab-mastery {
+  font-size: 12px;
+  white-space: nowrap;
 }

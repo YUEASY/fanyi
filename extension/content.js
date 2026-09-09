@@ -421,9 +421,14 @@ function showWordPopover(marker, familiarWords) {
   familiarButton.type = "button";
   familiarButton.textContent = "认识";
   familiarButton.addEventListener("click", async () => {
-    const stored = await chrome.storage.local.get({ familiarWords: [] });
+    const stored = await chrome.storage.local.get({ familiarWords: [], vocabBook: {} });
     const nextFamiliarWords = [...new Set([...stored.familiarWords, lemma])];
-    await chrome.storage.local.set({ familiarWords: nextFamiliarWords });
+    const update = { familiarWords: nextFamiliarWords };
+    if (stored.vocabBook[lemma]) {
+      stored.vocabBook[lemma] = { ...stored.vocabBook[lemma], mastered: true };
+      update.vocabBook = stored.vocabBook;
+    }
+    await chrome.storage.local.set(update);
     familiarWords.add(lemma);
     for (const match of document.querySelectorAll(".nbf-potential-word")) {
       if (match.dataset.lemma === lemma) match.replaceWith(match.textContent ?? "");
