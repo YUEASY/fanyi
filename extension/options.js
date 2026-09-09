@@ -57,12 +57,8 @@ function renderFamiliarWords() {
       removeButton.textContent = "移除";
       removeButton.setAttribute("aria-label", `移除 ${word}`);
       removeButton.addEventListener("click", async () => {
-        const stored = await chrome.storage.local.get({ removedFamiliarLemmas: [] });
         familiarWords = familiarWords.filter((candidate) => candidate !== word);
-        const removedFamiliarLemmas = [
-          ...new Set([...stored.removedFamiliarLemmas, word]),
-        ];
-        await chrome.storage.local.set({ familiarWords, removedFamiliarLemmas });
+        await chrome.storage.local.set({ familiarWords });
         renderFamiliarWords();
       });
       item.append(label, removeButton);

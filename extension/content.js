@@ -200,6 +200,7 @@ async function getFamiliarWords(bundledWords) {
 
   const familiarWords = bundledWords.slice(0, 1500);
   await chrome.storage.local.set({
+    initialFamiliarWords: familiarWords,
     familiarWords,
     familiarWordsInitialized: true,
   });
@@ -222,18 +223,9 @@ function showWordPopover(marker, familiarWords) {
   familiarButton.type = "button";
   familiarButton.textContent = "认识";
   familiarButton.addEventListener("click", async () => {
-    const stored = await chrome.storage.local.get({
-      familiarWords: [],
-      removedFamiliarLemmas: [],
-    });
+    const stored = await chrome.storage.local.get({ familiarWords: [] });
     const nextFamiliarWords = [...new Set([...stored.familiarWords, lemma])];
-    const removedFamiliarLemmas = stored.removedFamiliarLemmas.filter(
-      (removedLemma) => removedLemma !== lemma,
-    );
-    await chrome.storage.local.set({
-      familiarWords: nextFamiliarWords,
-      removedFamiliarLemmas,
-    });
+    await chrome.storage.local.set({ familiarWords: nextFamiliarWords });
     familiarWords.add(lemma);
     for (const match of document.querySelectorAll(".nbf-potential-word")) {
       if (match.dataset.lemma === lemma) match.replaceWith(match.textContent ?? "");
@@ -258,14 +250,10 @@ async function highlightPotentialWordsOnEnabledSite() {
   const bundledWords = await loadBundledWordList();
   const lexicon = new Set(bundledWords);
   const storedFamiliarWords = await getFamiliarWords(bundledWords);
-  const { removedFamiliarLemmas } = await chrome.storage.local.get({
-    removedFamiliarLemmas: [],
-  });
   const familiarWords = new Set(
-    [...storedFamiliarWords]
-      .map((word) => getLemma(word, lexicon))
-      .filter((lemma) => !removedFamiliarLemmas.includes(lemma)),
+    [...storedFamiliarWords].map((word) => getLemma(word, lexicon)),
   );
+  await chrome.storage.local.set({ familiarWords: [...familiarWords] });
   highlightPotentialWordsIn(document.body, familiarWords, lexicon);
   observeDynamicText(familiarWords, lexicon);
   listenForWordClicks(familiarWords);

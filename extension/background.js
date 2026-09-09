@@ -14,6 +14,10 @@ chrome.runtime.onInstalled.addListener(async () => {
       .map((word) => word.trim().toLowerCase())
       .filter(Boolean)
       .slice(0, 1500);
-    await chrome.storage.local.set({ familiarWords, familiarWordsInitialized: true });
+    await chrome.storage.local.set({
+      initialFamiliarWords: familiarWords,
+      familiarWords,
+      familiarWordsInitialized: true,
+    });
   }
 });

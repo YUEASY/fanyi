@@ -184,13 +184,14 @@ test("initializes familiar words once and does not restore a removed seed word",
     };
     const storage = await extensionGlobal.chrome.storage.local.get();
     const familiarWords = storage.familiarWords as string[];
+    const initialFamiliarWords = storage.initialFamiliarWords as string[];
     return {
-      count: familiarWords.length,
+      initialCount: initialFamiliarWords.length,
       initialized: storage.familiarWordsInitialized,
       containsThe: familiarWords.includes("the"),
     };
   });
-  expect(initialized).toEqual({ count: 1500, initialized: true, containsThe: true });
+  expect(initialized).toEqual({ initialCount: 1500, initialized: true, containsThe: true });
   await options.reload();
   await options.getByLabel("搜索熟词").fill("the");
   const familiarList = options.getByRole("list", { name: "熟词表" });
@@ -230,7 +231,6 @@ test("marks a reliable lemma as familiar from its word popover", async ({
     ]);
     await extensionGlobal.chrome.storage.local.set({
       familiarWords: (storage.familiarWords as string[]).filter((word) => !workForms.has(word)),
-      removedFamiliarLemmas: ["work", "use", "news", "new", "do", "doe", "go", "man", "woman", "foot"],
     });
   });
   await page.reload();
