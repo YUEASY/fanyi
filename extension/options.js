@@ -187,3 +187,39 @@ for (const filter of masteryFilters) {
   filter.addEventListener("change", renderVocabBook);
 }
 void loadVocabBook();
+
+const deepseekKey = document.querySelector("#deepseek-key");
+const deepseekSave = document.querySelector("#deepseek-save");
+const deepseekDelete = document.querySelector("#deepseek-delete");
+const deepseekStatus = document.querySelector("#deepseek-status");
+
+function showDeepSeekStatus(message) {
+  deepseekStatus.textContent = message;
+  deepseekStatus.hidden = false;
+}
+
+async function loadDeepSeekKey() {
+  const stored = await chrome.storage.local.get({ deepseekApiKey: "" });
+  deepseekKey.value = stored.deepseekApiKey || "";
+  deepseekDelete.disabled = !stored.deepseekApiKey;
+}
+
+deepseekSave.addEventListener("click", async () => {
+  const value = deepseekKey.value.trim();
+  if (!value) {
+    showDeepSeekStatus("请输入 API Key");
+    return;
+  }
+  await chrome.storage.local.set({ deepseekApiKey: value });
+  deepseekDelete.disabled = false;
+  showDeepSeekStatus("已保存");
+});
+
+deepseekDelete.addEventListener("click", async () => {
+  await chrome.storage.local.remove("deepseekApiKey");
+  deepseekKey.value = "";
+  deepseekDelete.disabled = true;
+  showDeepSeekStatus("已删除");
+});
+
+void loadDeepSeekKey();

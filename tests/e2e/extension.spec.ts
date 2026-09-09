@@ -44,11 +44,24 @@ let port: number;
 let onlineDictionaryCalls: string[] = [];
 let onlineDictionaryStatus = 200;
 let onlineDictionaryDefinitions: Record<string, string> = {};
+let onlineDictionaryDelayMs = 0;
+let deepseekCalls: { target: string; sentence: string; model: string; authorization: string }[] =
+  [];
+let deepseekStatus = 200;
+const DEFAULT_DEEPSEEK_RESPONSE = {
+  translation: "术语译文",
+  explanation: "当前语境下的一句话解释",
+};
+let deepseekResponseContent = JSON.stringify(DEFAULT_DEEPSEEK_RESPONSE);
 
 test.beforeEach(() => {
   onlineDictionaryCalls = [];
   onlineDictionaryStatus = 200;
   onlineDictionaryDefinitions = {};
+  onlineDictionaryDelayMs = 0;
+  deepseekCalls = [];
+  deepseekStatus = 200;
+  deepseekResponseContent = JSON.stringify(DEFAULT_DEEPSEEK_RESPONSE);
 });
 
 test.beforeAll(async () => {
@@ -64,13 +77,65 @@ test.beforeAll(async () => {
         response.end(JSON.stringify({ error: `HTTP ${status}` }));
         return;
       }
-      response.setHeader("content-type", "application/json; charset=utf-8");
-      response.end(
-        JSON.stringify({
-          responseData: { translatedText: onlineDictionaryDefinitions[word] ?? "" },
-          responseStatus: 200,
-        }),
-      );
+      const send = () => {
+        response.setHeader("content-type", "application/json; charset=utf-8");
+        response.end(
+          JSON.stringify({
+            responseData: { translatedText: onlineDictionaryDefinitions[word] ?? "" },
+            responseStatus: 200,
+          }),
+        );
+      };
+      if (onlineDictionaryDelayMs > 0) {
+        setTimeout(send, onlineDictionaryDelayMs);
+      } else {
+        send();
+      }
+      return;
+    }
+    if (url.pathname === "/deepseek" && request.method === "POST") {
+      let rawBody = "";
+      request.on("data", (chunk) => {
+        rawBody += chunk;
+      });
+      request.on("end", () => {
+        let payload: Record<string, unknown> = {};
+        try {
+          payload = JSON.parse(rawBody) as Record<string, unknown>;
+        } catch {
+          payload = {};
+        }
+        const messages = payload.messages as
+          | Array<{ role: string; content: string }>
+          | undefined;
+        const userContent = messages?.find((entry) => entry.role === "user")?.content ?? "";
+        let target = "";
+        let sentence = "";
+        try {
+          const parsed = JSON.parse(userContent) as { target?: string; sentence?: string };
+          target = parsed.target ?? "";
+          sentence = parsed.sentence ?? "";
+        } catch {
+          target = "";
+          sentence = "";
+        }
+        deepseekCalls.push({
+          target,
+          sentence,
+          model: typeof payload.model === "string" ? payload.model : "",
+          authorization: request.headers.authorization ?? "",
+        });
+        if (deepseekStatus !== 200) {
+          response.statusCode = deepseekStatus;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ error: `HTTP ${deepseekStatus}` }));
+          return;
+        }
+        response.setHeader("content-type", "application/json; charset=utf-8");
+        response.end(
+          JSON.stringify({ choices: [{ message: { content: deepseekResponseContent } }] }),
+        );
+      });
       return;
     }
     response.setHeader("content-type", "text/html; charset=utf-8");
@@ -79,6 +144,8 @@ test.beforeAll(async () => {
         <p id="static-copy">Quizzacious Quizzacious HTTP DeepSeek</p>
         <p id="word-forms">Working worked works</p>
         <p id="ambiguous-forms">Use uses News new Do does Doe Go went Man men Woman women Foot feet</p>
+        <p id="sentence-copy">The first uses Quizzacious here. The second uses Quizzacious there.</p>
+        <p id="inline-copy">The <em>Quizzacious</em> cache helps.</p>
         <p id="identifiers">12345 https://example.com/quizzacious useState foo_bar user123</p>
         <div id="dynamic-copy"></div>
         <p id="dynamic-update">the</p>
@@ -152,6 +219,37 @@ async function enableDocsHostAndOpenPage(
   const page = await context.newPage();
   await page.goto(`http://docs.localhost:${port}/guide`);
   return { options, page };
+}
+
+async function configureDeepSeek(
+  options: Page,
+  config: { apiKey?: string; apiUrl?: string },
+) {
+  await options.evaluate(async (cfg) => {
+    const extensionGlobal = globalThis as typeof globalThis & {
+      chrome: {
+        storage: {
+          local: {
+            set(value: Record<string, unknown>): Promise<void>;
+            remove(key: string): Promise<void>;
+          };
+        };
+      };
+    };
+    if (cfg.apiKey === undefined) {
+      await extensionGlobal.chrome.storage.local.remove("deepseekApiKey");
+    } else {
+      await extensionGlobal.chrome.storage.local.set({ deepseekApiKey: cfg.apiKey });
+    }
+    if (cfg.apiUrl !== undefined) {
+      await extensionGlobal.chrome.storage.local.set({ deepseekApiUrl: cfg.apiUrl });
+    }
+  }, config);
+}
+
+async function openQuizzaciousDialog(page: Page, target: string, occurrence = 0) {
+  await page.locator(target, { hasText: "Quizzacious" }).nth(occurrence).click();
+  return page.getByRole("dialog", { name: "单词详情" });
 }
 
 test("enables only the entered full hostname and keeps it after reload", async ({
@@ -752,4 +850,291 @@ test("marking a collected word familiar syncs its mastery status", async ({
     quizzacious: { definition: "古怪的", mastered: true },
   });
   expect(storage.familiarWords).toContain("quizzacious");
+});
+
+test("configures, masks, replaces, deletes and persists the DeepSeek API key", async ({
+  context,
+  extensionId,
+  userDataDir,
+}) => {
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/options.html`);
+
+  const keyInput = options.getByRole("textbox", { name: "API Key" });
+  await keyInput.fill("sk-first");
+  await options.getByRole("button", { name: "保存" }).click();
+  await expect(options.getByRole("status")).toContainText("已保存");
+  expect(await keyInput.getAttribute("type")).toBe("password");
+
+  let storage = await readStorage(options);
+  expect(storage.deepseekApiKey).toBe("sk-first");
+
+  await options.reload();
+  await expect(options.getByRole("textbox", { name: "API Key" })).toHaveValue("sk-first");
+  expect(await options.getByRole("textbox", { name: "API Key" }).getAttribute("type")).toBe("password");
+
+  await options.getByRole("textbox", { name: "API Key" }).fill("sk-second");
+  await options.getByRole("button", { name: "保存" }).click();
+  storage = await readStorage(options);
+  expect(storage.deepseekApiKey).toBe("sk-second");
+
+  await options.getByRole("button", { name: "删除" }).click();
+  await expect(options.getByRole("status")).toContainText("已删除");
+  storage = await readStorage(options);
+  expect(storage.deepseekApiKey).toBeUndefined();
+
+  await options.getByRole("textbox", { name: "API Key" }).fill("sk-restart");
+  await options.getByRole("button", { name: "保存" }).click();
+
+  await context.close();
+  const reloadedContext = await launchExtension(userDataDir);
+  const reloadedOptions = await reloadedContext.newPage();
+  await reloadedOptions.goto(`chrome-extension://${extensionId}/options.html`);
+  await expect(reloadedOptions.getByRole("textbox", { name: "API Key" })).toHaveValue("sk-restart");
+  expect(await reloadedOptions.getByRole("textbox", { name: "API Key" }).getAttribute("type")).toBe("password");
+  await reloadedContext.close();
+});
+
+test("prompts and offers 前往设置 when translating without a configured key", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: { quizzacious: "古怪的" },
+  });
+  await configureDeepSeek(options, {});
+  const dialog = await openQuizzaciousDialog(page, "#static-copy .nbf-potential-word");
+  const translateButton = dialog.getByRole("button", { name: "专业术语翻译" });
+  await expect(translateButton).toBeVisible();
+  await translateButton.click();
+  await expect(dialog).toContainText("尚未配置 DeepSeek API Key");
+  await expect(dialog.getByRole("button", { name: "前往设置" })).toBeVisible();
+  expect(deepseekCalls).toEqual([]);
+});
+
+test("calls DeepSeek only on click with the default model, the target and its sentence", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: { quizzacious: "古怪的" },
+  });
+  await configureDeepSeek(options, {
+    apiKey: "sk-test-123",
+    apiUrl: `http://docs.localhost:${port}/deepseek`,
+  });
+  const dialog = await openQuizzaciousDialog(page, "#sentence-copy .nbf-potential-word");
+  await expect(dialog).toContainText("古怪的");
+  expect(deepseekCalls).toEqual([]);
+
+  await dialog.getByRole("button", { name: "专业术语翻译" }).click();
+  await expect(dialog).toContainText("术语译文");
+  expect(deepseekCalls).toHaveLength(1);
+  expect(deepseekCalls[0]).toMatchObject({
+    target: "quizzacious",
+    sentence: "The first uses Quizzacious here.",
+    model: "deepseek-v4-flash",
+    authorization: "Bearer sk-test-123",
+  });
+  expect(deepseekCalls[0].sentence).not.toContain("Codeword");
+  expect(deepseekCalls[0].sentence).not.toContain("12345");
+  expect(deepseekCalls[0].sentence).not.toContain("https://");
+});
+
+test("renders only the Chinese translation and a short explanation from the LLM result", async ({
+  context,
+  extensionId,
+}) => {
+  deepseekResponseContent = JSON.stringify({
+    translation: "缓存",
+    explanation: "此处指缓存查询结果的机制。",
+    phonetic: "/kæʃ/",
+    partOfSpeech: "noun",
+    examples: ["Cache the value."],
+  });
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: { quizzacious: "古怪的" },
+  });
+  await configureDeepSeek(options, {
+    apiKey: "sk-test",
+    apiUrl: `http://docs.localhost:${port}/deepseek`,
+  });
+  const dialog = await openQuizzaciousDialog(page, "#static-copy .nbf-potential-word");
+  await dialog.getByRole("button", { name: "专业术语翻译" }).click();
+  await expect(dialog).toContainText("缓存");
+  await expect(dialog).toContainText("此处指缓存查询结果的机制。");
+  await expect(dialog).not.toContainText("/kæʃ/");
+  await expect(dialog).not.toContainText("noun");
+  await expect(dialog).not.toContainText("Cache the value.");
+});
+
+test("reuses the LLM result for the same target and context and never auto-calls a new context", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: { quizzacious: "古怪的" },
+  });
+  await configureDeepSeek(options, {
+    apiKey: "sk-test",
+    apiUrl: `http://docs.localhost:${port}/deepseek`,
+  });
+
+  const dialog = await openQuizzaciousDialog(page, "#static-copy .nbf-potential-word");
+  await dialog.getByRole("button", { name: "专业术语翻译" }).click();
+  await expect(dialog).toContainText("术语译文");
+  expect(deepseekCalls).toHaveLength(1);
+
+  await page.keyboard.press("Escape");
+  const secondDialog = await openQuizzaciousDialog(page, "#static-copy .nbf-potential-word", 1);
+  await secondDialog.getByRole("button", { name: "专业术语翻译" }).click();
+  await expect(secondDialog).toContainText("术语译文");
+  expect(deepseekCalls).toHaveLength(1);
+
+  await page.keyboard.press("Escape");
+  const newDialog = await openQuizzaciousDialog(page, "#sentence-copy .nbf-potential-word");
+  await expect(newDialog).toContainText("古怪的");
+  await expect(newDialog).not.toContainText("术语译文");
+  expect(deepseekCalls).toHaveLength(1);
+
+  await newDialog.getByRole("button", { name: "专业术语翻译" }).click();
+  await expect(newDialog).toContainText("术语译文");
+  expect(deepseekCalls).toHaveLength(2);
+  expect(deepseekCalls[1].sentence).toBe("The first uses Quizzacious here.");
+});
+
+test("keeps the normal definition and shows a clear error without auto-retry when the LLM fails", async ({
+  context,
+  extensionId,
+}) => {
+  deepseekStatus = 500;
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: { quizzacious: "古怪的" },
+  });
+  await configureDeepSeek(options, {
+    apiKey: "sk-test",
+    apiUrl: `http://docs.localhost:${port}/deepseek`,
+  });
+  const dialog = await openQuizzaciousDialog(page, "#static-copy .nbf-potential-word");
+  await expect(dialog).toContainText("古怪的");
+  await dialog.getByRole("button", { name: "专业术语翻译" }).click();
+  await expect(dialog).toContainText("DeepSeek 返回 HTTP 500");
+  await expect(dialog).toContainText("古怪的");
+  expect(deepseekCalls).toHaveLength(1);
+
+  await page.waitForTimeout(500);
+  expect(deepseekCalls).toHaveLength(1);
+});
+
+test("shows a clear network error for the LLM and retains the dictionary definition", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: { quizzacious: "古怪的" },
+  });
+  await configureDeepSeek(options, {
+    apiKey: "sk-test",
+    apiUrl: "http://network-error.invalid/deepseek",
+  });
+  const dialog = await openQuizzaciousDialog(page, "#static-copy .nbf-potential-word");
+  await dialog.getByRole("button", { name: "专业术语翻译" }).click();
+  await expect(dialog).toContainText("网络错误，请检查网络连接");
+  await expect(dialog).toContainText("古怪的");
+});
+
+test("collecting after a successful LLM translation saves the LLM result over the dictionary", async ({
+  context,
+  extensionId,
+}) => {
+  deepseekResponseContent = JSON.stringify({ translation: "术语释义", explanation: "一句话解释" });
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: { quizzacious: "古怪的" },
+  });
+  await configureDeepSeek(options, {
+    apiKey: "sk-test",
+    apiUrl: `http://docs.localhost:${port}/deepseek`,
+  });
+  const dialog = await openQuizzaciousDialog(page, "#static-copy .nbf-potential-word");
+  await expect(dialog).toContainText("古怪的");
+  await dialog.getByRole("button", { name: "专业术语翻译" }).click();
+  await expect(dialog).toContainText("术语释义");
+  await dialog.getByRole("button", { name: "加入生词本" }).click();
+
+  const storage = await readStorage(options);
+  const vocabBook = storage.vocabBook as VocabBook;
+  expect(vocabBook).toEqual({ quizzacious: { definition: "术语释义", mastered: false } });
+});
+
+test("enables collection after an LLM translation when the dictionary has no definition", async ({
+  context,
+  extensionId,
+}) => {
+  deepseekResponseContent = JSON.stringify({ translation: "术语释义", explanation: "一句话解释" });
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: {},
+  });
+  await configureDeepSeek(options, {
+    apiKey: "sk-test",
+    apiUrl: `http://docs.localhost:${port}/deepseek`,
+  });
+  const dialog = await openQuizzaciousDialog(page, "#static-copy .nbf-potential-word");
+  await expect(dialog).toContainText("未找到释义");
+  const collect = dialog.getByRole("button", { name: "加入生词本" });
+  await expect(collect).toBeDisabled();
+  await dialog.getByRole("button", { name: "专业术语翻译" }).click();
+  await expect(dialog).toContainText("术语释义");
+  await expect(collect).toBeEnabled();
+  await collect.click();
+
+  const storage = await readStorage(options);
+  expect((storage.vocabBook as VocabBook).quizzacious).toEqual({
+    definition: "术语释义",
+    mastered: false,
+  });
+});
+
+test("sends the full sentence when the word sits inside an inline element", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: { quizzacious: "古怪的" },
+  });
+  await configureDeepSeek(options, {
+    apiKey: "sk-test",
+    apiUrl: `http://docs.localhost:${port}/deepseek`,
+  });
+  const dialog = await openQuizzaciousDialog(page, "#inline-copy .nbf-potential-word");
+  await dialog.getByRole("button", { name: "专业术语翻译" }).click();
+  await expect(dialog).toContainText("术语译文");
+  expect(deepseekCalls).toHaveLength(1);
+  expect(deepseekCalls[0].sentence).toBe("The Quizzacious cache helps.");
+});
+
+test("keeps the LLM result when a slow dictionary lookup finishes after the LLM", async ({
+  context,
+  extensionId,
+}) => {
+  onlineDictionaryDelayMs = 400;
+  onlineDictionaryDefinitions = { quizzacious: "古怪的（在线）" };
+  deepseekResponseContent = JSON.stringify({ translation: "术语释义", explanation: "一句话解释" });
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: {},
+  });
+  await configureDeepSeek(options, {
+    apiKey: "sk-test",
+    apiUrl: `http://docs.localhost:${port}/deepseek`,
+  });
+  const dialog = await openQuizzaciousDialog(page, "#static-copy .nbf-potential-word");
+  await dialog.getByRole("button", { name: "专业术语翻译" }).click();
+  await expect(dialog).toContainText("术语释义");
+  await expect(dialog).toContainText("古怪的（在线）");
+  await dialog.getByRole("button", { name: "加入生词本" }).click();
+
+  const storage = await readStorage(options);
+  expect((storage.vocabBook as VocabBook).quizzacious).toEqual({
+    definition: "术语释义",
+    mastered: false,
+  });
 });

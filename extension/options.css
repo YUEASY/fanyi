@@ -127,3 +127,13 @@ button {
   font-size: 12px;
   white-space: nowrap;
 }
+
+#deepseek-status {
+  color: #5f6368;
+}
+
+#deepseek-delete {
+  background: #fff;
+  border: 1px solid #bdc1c6;
+  color: #202124;
+}

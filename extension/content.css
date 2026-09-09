@@ -73,3 +73,30 @@
   color: #9aa0a6;
   font-size: 12px;
 }
+
+.nbf-llm-button {
+  margin-top: 8px;
+}
+
+.nbf-llm-area {
+  margin-top: 8px;
+}
+
+.nbf-llm-translation {
+  font-weight: 600;
+}
+
+.nbf-llm-explanation {
+  color: #5f6368;
+  white-space: pre-wrap;
+}
+
+.nbf-llm-error {
+  color: #c5221f;
+  white-space: pre-wrap;
+}
+
+.nbf-llm-prompt,
+.nbf-llm-loading {
+  color: #5f6368;
+}

@@ -349,6 +349,104 @@ function renderDefinitionError(definitionArea, lemma, error, onLookupResult) {
   definitionArea.append(reason, retryButton);
 }
 
+const llmResultCache = new Map();
+
+const SENTENCE_TERMINATORS = [".", "!", "?", ";", "\n"];
+
+function getSentenceStart(before) {
+  let last = -1;
+  for (const separator of SENTENCE_TERMINATORS) {
+    const index = before.lastIndexOf(separator);
+    if (index > last) last = index;
+  }
+  return last + 1;
+}
+
+function getSentenceEnd(after) {
+  let first = -1;
+  for (const separator of SENTENCE_TERMINATORS) {
+    const index = after.indexOf(separator);
+    if (index !== -1 && (first === -1 || index < first)) first = index;
+  }
+  return first === -1 ? after.length : first + 1;
+}
+
+const INLINE_DISPLAYS = new Set(["inline", "contents", "inline-block", "inline-flex", "inline-grid"]);
+
+function findSentenceContainer(marker) {
+  let current = marker.parentElement;
+  while (current && current !== document.body) {
+    const display = getComputedStyle(current).display;
+    if (!INLINE_DISPLAYS.has(display)) return current;
+    current = current.parentElement;
+  }
+  return current;
+}
+
+function getContainingSentence(marker) {
+  const container = findSentenceContainer(marker);
+  const fallback = marker.textContent ?? "";
+  if (!container) return fallback;
+  const fullText = container.textContent ?? "";
+  const range = document.createRange();
+  range.selectNodeContents(container);
+  range.setEndBefore(marker);
+  const start = range.toString().length;
+  const wordLength = marker.textContent?.length ?? 0;
+  const before = fullText.slice(0, start);
+  const after = fullText.slice(start + wordLength);
+  const sentence = fullText
+    .slice(getSentenceStart(before), start + wordLength + getSentenceEnd(after))
+    .trim();
+  return sentence || fallback;
+}
+
+async function getDeepSeekApiKey() {
+  const stored = await chrome.storage.local.get({ deepseekApiKey: "" });
+  return typeof stored.deepseekApiKey === "string" ? stored.deepseekApiKey : "";
+}
+
+function renderLlmPrompt(area) {
+  area.replaceChildren();
+  const prompt = document.createElement("p");
+  prompt.className = "nbf-llm-prompt";
+  prompt.textContent = "尚未配置 DeepSeek API Key";
+  const goToSettings = document.createElement("button");
+  goToSettings.type = "button";
+  goToSettings.textContent = "前往设置";
+  goToSettings.addEventListener("click", () => {
+    chrome.runtime.openOptionsPage();
+  });
+  area.append(prompt, goToSettings);
+}
+
+function renderLlmLoading(area) {
+  area.replaceChildren();
+  const loading = document.createElement("p");
+  loading.className = "nbf-llm-loading";
+  loading.textContent = "翻译中…";
+  area.append(loading);
+}
+
+function renderLlmResult(area, result) {
+  area.replaceChildren();
+  const translation = document.createElement("p");
+  translation.className = "nbf-llm-translation";
+  translation.textContent = result.translation;
+  const explanation = document.createElement("p");
+  explanation.className = "nbf-llm-explanation";
+  explanation.textContent = result.explanation;
+  area.append(translation, explanation);
+}
+
+function renderLlmError(area, message) {
+  area.replaceChildren();
+  const error = document.createElement("p");
+  error.className = "nbf-llm-error";
+  error.textContent = message;
+  area.append(error);
+}
+
 function showWordPopover(marker, familiarWords) {
   const lemma = marker.dataset.lemma;
   if (!lemma) return;
@@ -369,11 +467,20 @@ function showWordPopover(marker, familiarWords) {
   definitionArea.className = "nbf-definition-area";
   const definition = renderLoadingDefinition(definitionArea);
 
+  const llmButton = document.createElement("button");
+  llmButton.type = "button";
+  llmButton.className = "nbf-llm-button";
+  llmButton.textContent = "专业术语翻译";
+
+  const llmArea = document.createElement("div");
+  llmArea.className = "nbf-llm-area";
+
   const managedAs = document.createElement("p");
   managedAs.className = "nbf-managed-as";
   managedAs.textContent = `按 ${lemma} 管理`;
 
   let currentDefinition = null;
+  let hasLlmDefinition = false;
   let lookupState = "loading";
   let alreadyCollected = false;
 
@@ -404,9 +511,49 @@ function showWordPopover(marker, familiarWords) {
     }
   }
 
+  llmButton.addEventListener("click", async () => {
+    const apiKey = await getDeepSeekApiKey();
+    if (!apiKey) {
+      renderLlmPrompt(llmArea);
+      return;
+    }
+    const target = lemma;
+    const sentence = getContainingSentence(marker);
+    const cacheKey = `${target}\n${sentence}`;
+    const cached = llmResultCache.get(cacheKey);
+    if (cached) {
+      renderLlmResult(llmArea, cached);
+      currentDefinition = cached.translation;
+      hasLlmDefinition = true;
+      refreshCollectButton();
+      return;
+    }
+    renderLlmLoading(llmArea);
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "deepseek-translate",
+        target,
+        sentence,
+      });
+      if (!response?.ok) throw new Error(response?.error ?? "LLM 翻译失败");
+      const result = {
+        translation: response.translation,
+        explanation: response.explanation,
+      };
+      llmResultCache.set(cacheKey, result);
+      if (!llmArea.isConnected) return;
+      renderLlmResult(llmArea, result);
+      currentDefinition = result.translation;
+      hasLlmDefinition = true;
+      refreshCollectButton();
+    } catch (error) {
+      if (!llmArea.isConnected) return;
+      renderLlmError(llmArea, error?.message ?? "LLM 翻译失败");
+    }
+  });
+
   collectButton.addEventListener("click", async () => {
     // 收录释义在收藏时确定：优先采用已获得的 LLM 结果，否则采用普通词典结果。
-    // LLM 结果将在 issue #8 接入后更新 currentDefinition。
     const definition = currentDefinition;
     if (!definition) return;
     const vocabBook = await getVocabBook();
@@ -441,7 +588,7 @@ function showWordPopover(marker, familiarWords) {
   actions.append(familiarButton, collectButton);
 
   refreshCollectButton();
-  popover.append(word, definitionArea, managedAs, actions, collectHint);
+  popover.append(word, definitionArea, llmButton, llmArea, managedAs, actions, collectHint);
   document.body.append(popover);
   positionPopover(popover, marker);
 
@@ -454,7 +601,7 @@ function showWordPopover(marker, familiarWords) {
     await renderDefinitionResult(definitionArea, lemma, definition, (status) => {
       if (status.state === "resolved") {
         lookupState = "resolved";
-        currentDefinition = status.definition;
+        if (!hasLlmDefinition) currentDefinition = status.definition;
       } else {
         lookupState = status.state;
       }
