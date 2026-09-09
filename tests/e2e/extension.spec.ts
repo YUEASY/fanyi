@@ -49,7 +49,7 @@ test.beforeAll(async () => {
       <main>
         <p id="static-copy">Quizzacious Quizzacious HTTP DeepSeek</p>
         <p id="word-forms">Working worked works</p>
-        <p id="ambiguous-forms">Use uses News new</p>
+        <p id="ambiguous-forms">Use uses News new Do does Doe</p>
         <p id="identifiers">12345 https://example.com/quizzacious useState foo_bar user123</p>
         <div id="dynamic-copy"></div>
         <p id="dynamic-update">the</p>
@@ -225,6 +225,7 @@ test("marks a reliable lemma as familiar from its word popover", async ({
     const workForms = new Set([
       "work", "working", "worked", "works",
       "use", "uses", "used", "using", "us", "news", "new",
+      "do", "does", "did", "doing", "doe",
     ]);
     await extensionGlobal.chrome.storage.local.set({
       familiarWords: (storage.familiarWords as string[]).filter((word) => !workForms.has(word)),
@@ -256,4 +257,6 @@ test("marks a reliable lemma as familiar from its word popover", async ({
   await expect(page.getByRole("dialog", { name: "单词详情" })).toContainText("按 use 管理");
   await page.locator("#ambiguous-forms .nbf-potential-word", { hasText: "News" }).click();
   await expect(page.getByRole("dialog", { name: "单词详情" })).toContainText("按 news 管理");
+  await page.locator("#ambiguous-forms .nbf-potential-word", { hasText: "does" }).click();
+  await expect(page.getByRole("dialog", { name: "单词详情" })).toContainText("按 do 管理");
 });

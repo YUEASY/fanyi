@@ -1,10 +1,17 @@
 const EXCLUDED_SELECTOR =
   "code, pre, script, style, input, textarea, noscript, [hidden], .nbf-potential-word, .nbf-word-popover";
+const IRREGULAR_FORMS = new Map([
+  ["am", "be"], ["is", "be"], ["are", "be"], ["was", "be"],
+  ["were", "be"], ["been", "be"], ["being", "be"],
+  ["has", "have"], ["had", "have"], ["having", "have"],
+  ["does", "do"], ["did", "do"], ["doing", "do"],
+]);
+const UNINFLECTED_WORDS = new Set(["news"]);
 
 function getLemma(word, lexicon) {
   const lowerWord = word.toLowerCase();
-  const uninflectedWords = new Set(["news"]);
-  if (uninflectedWords.has(lowerWord)) return lowerWord;
+  if (IRREGULAR_FORMS.has(lowerWord)) return IRREGULAR_FORMS.get(lowerWord);
+  if (UNINFLECTED_WORDS.has(lowerWord)) return lowerWord;
 
   if (lowerWord.endsWith("ies") && lowerWord.length > 3) {
     const candidate = `${lowerWord.slice(0, -3)}y`;
