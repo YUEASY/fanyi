@@ -1,25 +1,24 @@
-const EXCLUDED_ELEMENTS = new Set([
-  "CODE",
-  "PRE",
-  "SCRIPT",
-  "STYLE",
-  "INPUT",
-  "TEXTAREA",
-  "NOSCRIPT",
-]);
+const EXCLUDED_SELECTOR =
+  "code, pre, script, style, input, textarea, noscript, [hidden], .nbf-potential-word";
 
 function isVisible(element) {
-  if (element.hidden) return false;
-  const style = getComputedStyle(element);
-  return style.display !== "none" && style.visibility !== "hidden";
+  if (element.getClientRects().length === 0) return false;
+  for (let current = element; current; current = current.parentElement) {
+    const style = getComputedStyle(current);
+    if (
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      Number.parseFloat(style.opacity) === 0
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function shouldScan(textNode) {
   const parent = textNode.parentElement;
-  if (!parent || EXCLUDED_ELEMENTS.has(parent.tagName)) return false;
-  if (parent.closest("code, pre, script, style, input, textarea, noscript, [hidden], .nbf-potential-word")) {
-    return false;
-  }
+  if (!parent || parent.closest(EXCLUDED_SELECTOR)) return false;
   return isVisible(parent);
 }
 
@@ -77,7 +76,7 @@ async function getFamiliarWords() {
   return new Set(familiarWords);
 }
 
-async function run() {
+async function highlightPotentialWordsOnEnabledSite() {
   const { enabledHosts } = await chrome.storage.local.get({ enabledHosts: [] });
   if (!enabledHosts.includes(location.hostname.toLowerCase())) return;
 
@@ -90,4 +89,4 @@ async function run() {
   for (const textNode of textNodes) highlightTextNode(textNode, familiarWords);
 }
 
-void run();
+void highlightPotentialWordsOnEnabledSite();

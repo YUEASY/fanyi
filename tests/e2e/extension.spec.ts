@@ -1,20 +1,34 @@
 import { test as base, chromium, expect, type BrowserContext } from "@playwright/test";
 import { createServer, type Server } from "node:http";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
-const test = base.extend<{ context: BrowserContext; extensionId: string }>({
-  context: async ({}, use) => {
-    const extensionPath = path.join(process.cwd(), "extension");
-    const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE;
-    const context = await chromium.launchPersistentContext("", {
-      channel: "chromium",
-      executablePath,
-      headless: true,
-      args: [
-        `--disable-extensions-except=${extensionPath}`,
-        `--load-extension=${extensionPath}`,
-      ],
-    });
+async function launchExtension(userDataDir: string) {
+  const extensionPath = path.join(process.cwd(), "extension");
+  return chromium.launchPersistentContext(userDataDir, {
+    channel: "chromium",
+    executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE,
+    headless: true,
+    args: [
+      `--disable-extensions-except=${extensionPath}`,
+      `--load-extension=${extensionPath}`,
+    ],
+  });
+}
+
+const test = base.extend<{
+  context: BrowserContext;
+  extensionId: string;
+  userDataDir: string;
+}>({
+  userDataDir: async ({}, use) => {
+    const directory = await mkdtemp(path.join(tmpdir(), "niubifanyi-e2e-"));
+    await use(directory);
+    await rm(directory, { recursive: true, force: true });
+  },
+  context: async ({ userDataDir }, use) => {
+    const context = await launchExtension(userDataDir);
     await use(context);
     await context.close();
   },
@@ -35,6 +49,7 @@ test.beforeAll(async () => {
       <main>Developers orchestrate deterministic workflows.</main>
       <pre>Infrastructure should remain untouched.</pre>
       <p hidden>Invisible vocabulary stays hidden.</p>
+      <p style="opacity: 0">Transparent vocabulary stays hidden.</p>
     </body></html>`);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -52,6 +67,7 @@ test.afterAll(async () => {
 test("enables only the entered full hostname and keeps it after reload", async ({
   context,
   extensionId,
+  userDataDir,
 }) => {
   const options = await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/options.html`);
@@ -68,6 +84,7 @@ test("enables only the entered full hostname and keeps it after reload", async (
   );
   await expect(enabled.locator("pre .nbf-potential-word")).toHaveCount(0);
   await expect(enabled.locator("[hidden] .nbf-potential-word")).toHaveCount(0);
+  await expect(enabled.locator('[style="opacity: 0"] .nbf-potential-word')).toHaveCount(0);
 
   await enabled.reload();
   await expect(enabled.locator(".nbf-potential-word")).not.toHaveCount(0);
@@ -80,6 +97,10 @@ test("enables only the entered full hostname and keeps it after reload", async (
   await sibling.goto(`http://api.localhost:${port}/guide`);
   await expect(sibling.locator(".nbf-potential-word")).toHaveCount(0);
 
-  await options.reload();
-  await expect(options.getByText("docs.localhost", { exact: true })).toBeVisible();
+  await context.close();
+  const reloadedContext = await launchExtension(userDataDir);
+  const reloadedOptions = await reloadedContext.newPage();
+  await reloadedOptions.goto(`chrome-extension://${extensionId}/options.html`);
+  await expect(reloadedOptions.getByText("docs.localhost", { exact: true })).toBeVisible();
+  await reloadedContext.close();
 });

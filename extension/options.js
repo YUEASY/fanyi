@@ -8,7 +8,7 @@ async function getEnabledHosts() {
   return stored.enabledHosts;
 }
 
-function render(hosts) {
+function renderEnabledHosts(hosts) {
   list.replaceChildren(
     ...hosts.map((host) => {
       const item = document.createElement("li");
@@ -31,7 +31,7 @@ form.addEventListener("submit", async (event) => {
     const hosts = await getEnabledHosts();
     const enabledHosts = [...new Set([...hosts, url.hostname.toLowerCase()])].sort();
     await chrome.storage.local.set({ enabledHosts });
-    render(enabledHosts);
+    renderEnabledHosts(enabledHosts);
     form.reset();
   } catch {
     error.textContent = "请输入有效的 http 或 https 页面网址";
@@ -39,4 +39,4 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
-void getEnabledHosts().then(render);
+void getEnabledHosts().then(renderEnabledHosts);
