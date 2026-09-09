@@ -48,6 +48,7 @@ test.beforeAll(async () => {
     response.end(`<!doctype html><html><body>
       <main>
         <p id="static-copy">Quizzacious Quizzacious HTTP DeepSeek</p>
+        <p id="word-forms">Working worked works</p>
         <p id="identifiers">12345 https://example.com/quizzacious useState foo_bar user123</p>
         <div id="dynamic-copy"></div>
         <p id="dynamic-update">the</p>
@@ -155,4 +156,97 @@ test("enables only the entered full hostname and keeps it after reload", async (
   await reloadedOptions.goto(`chrome-extension://${extensionId}/options.html`);
   await expect(reloadedOptions.getByText("docs.localhost", { exact: true })).toBeVisible();
   await reloadedContext.close();
+});
+
+test("initializes familiar words once and does not restore a removed seed word", async ({
+  context,
+  extensionId,
+  userDataDir,
+}) => {
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/options.html`);
+  await options.getByLabel("页面网址").fill(`http://docs.localhost:${port}/guide`);
+  await options.getByRole("button", { name: "启用网站" }).click();
+
+  const page = await context.newPage();
+  await page.goto(`http://docs.localhost:${port}/guide`);
+  await expect(page.locator(".nbf-potential-word")).not.toHaveCount(0);
+  await expect(page.locator("#dynamic-update .nbf-potential-word")).toHaveCount(0);
+
+  const initialized = await options.evaluate(async () => {
+    const extensionGlobal = globalThis as typeof globalThis & {
+      chrome: { storage: { local: {
+        get(): Promise<Record<string, unknown>>;
+        set(value: Record<string, unknown>): Promise<void>;
+      } } };
+    };
+    const storage = await extensionGlobal.chrome.storage.local.get();
+    const familiarWords = storage.familiarWords as string[];
+    await extensionGlobal.chrome.storage.local.set({
+      familiarWords: familiarWords.filter((word) => word !== "the"),
+    });
+    return {
+      count: familiarWords.length,
+      initialized: storage.familiarWordsInitialized,
+      containsThe: familiarWords.includes("the"),
+    };
+  });
+  expect(initialized).toEqual({ count: 1500, initialized: true, containsThe: true });
+
+  await context.close();
+  const reloadedContext = await launchExtension(userDataDir);
+  const reloadedPage = await reloadedContext.newPage();
+  await reloadedPage.goto(`http://docs.localhost:${port}/guide`);
+  await expect(
+    reloadedPage.locator("#dynamic-update .nbf-potential-word", { hasText: "the" }),
+  ).toHaveCount(1);
+  await reloadedContext.close();
+});
+
+test("marks a reliable lemma as familiar from its word popover", async ({
+  context,
+  extensionId,
+}) => {
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/options.html`);
+  await options.getByLabel("页面网址").fill(`http://docs.localhost:${port}/guide`);
+  await options.getByRole("button", { name: "启用网站" }).click();
+
+  const page = await context.newPage();
+  await page.goto(`http://docs.localhost:${port}/guide`);
+  await expect(page.locator(".nbf-potential-word")).not.toHaveCount(0);
+  await options.evaluate(async () => {
+    const extensionGlobal = globalThis as typeof globalThis & {
+      chrome: { storage: { local: {
+        get(key: string): Promise<Record<string, unknown>>;
+        set(value: Record<string, unknown>): Promise<void>;
+      } } };
+    };
+    const storage = await extensionGlobal.chrome.storage.local.get("familiarWords");
+    const workForms = new Set(["work", "working", "worked", "works"]);
+    await extensionGlobal.chrome.storage.local.set({
+      familiarWords: (storage.familiarWords as string[]).filter((word) => !workForms.has(word)),
+    });
+  });
+  await page.reload();
+
+  const forms = page.locator("#word-forms .nbf-potential-word");
+  await expect(forms).toHaveCount(3);
+  await page
+    .locator("#static-copy .nbf-potential-word", { hasText: "Quizzacious" })
+    .first()
+    .click();
+  await expect(page.getByRole("dialog", { name: "单词详情" })).toContainText(
+    "按 quizzacious 管理",
+  );
+  await forms.filter({ hasText: "Working" }).click();
+  const popover = page.getByRole("dialog", { name: "单词详情" });
+  await expect(popover).toContainText("按 work 管理");
+  const familiarButton = popover.getByRole("button", { name: "认识" });
+  await expect(familiarButton).toBeEnabled();
+  await familiarButton.click();
+
+  await expect(forms).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator("#word-forms .nbf-potential-word")).toHaveCount(0);
 });

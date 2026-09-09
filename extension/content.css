@@ -1,6 +1,35 @@
 .nbf-potential-word {
+  cursor: pointer;
   text-decoration-line: underline;
   text-decoration-color: #e6c84f;
   text-decoration-thickness: 2px;
   text-underline-offset: 3px;
+}
+
+.nbf-word-popover {
+  position: fixed;
+  z-index: 2147483647;
+  top: 16px;
+  right: 16px;
+  min-width: 180px;
+  padding: 16px;
+  border: 1px solid #d8d8d8;
+  border-radius: 8px;
+  background: #fff;
+  color: #202124;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 18%);
+  font: 14px/1.5 system-ui, sans-serif;
+}
+
+.nbf-word-popover p {
+  margin: 0 0 12px;
+}
+
+.nbf-word-popover button {
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 6px;
+  background: #1a73e8;
+  color: #fff;
+  cursor: pointer;
 }

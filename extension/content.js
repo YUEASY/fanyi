@@ -1,5 +1,32 @@
 const EXCLUDED_SELECTOR =
-  "code, pre, script, style, input, textarea, noscript, [hidden], .nbf-potential-word";
+  "code, pre, script, style, input, textarea, noscript, [hidden], .nbf-potential-word, .nbf-word-popover";
+
+function getLemma(word, lexicon) {
+  const lowerWord = word.toLowerCase();
+  const candidates = new Set();
+  const addCandidate = (candidate) => {
+    if (candidate !== lowerWord && lexicon.has(candidate)) candidates.add(candidate);
+  };
+
+  if (lowerWord.endsWith("ies") && lowerWord.length > 3) {
+    addCandidate(`${lowerWord.slice(0, -3)}y`);
+  } else if (lowerWord.endsWith("es") && lowerWord.length > 2) {
+    addCandidate(lowerWord.slice(0, -2));
+    addCandidate(lowerWord.slice(0, -1));
+  } else if (lowerWord.endsWith("s") && !lowerWord.endsWith("ss")) {
+    addCandidate(lowerWord.slice(0, -1));
+  }
+
+  for (const suffix of ["ing", "ed"]) {
+    if (!lowerWord.endsWith(suffix) || lowerWord.length <= suffix.length) continue;
+    const stem = lowerWord.slice(0, -suffix.length);
+    addCandidate(stem);
+    addCandidate(`${stem}e`);
+    if (stem.length > 2 && stem.at(-1) === stem.at(-2)) addCandidate(stem.slice(0, -1));
+  }
+
+  return candidates.size === 1 ? candidates.values().next().value : lowerWord;
+}
 
 function isVisible(element) {
   if (element.getClientRects().length === 0) return false;
@@ -31,7 +58,7 @@ function getIgnoredRanges(source) {
   });
 }
 
-function highlightTextNode(textNode, familiarWords) {
+function highlightTextNode(textNode, familiarWords, lexicon) {
   const source = textNode.nodeValue ?? "";
   const wordPattern = /[A-Za-z]+(?:'[A-Za-z]+)*/g;
   const fragment = document.createDocumentFragment();
@@ -41,18 +68,20 @@ function highlightTextNode(textNode, familiarWords) {
 
   for (const match of source.matchAll(wordPattern)) {
     const word = match[0];
+    const lemma = getLemma(word, lexicon);
     const index = match.index ?? 0;
     fragment.append(source.slice(cursor, index));
 
     const isIgnored = ignoredRanges.some(
       (range) => index >= range.start && index < range.end,
     );
-    if (isIgnored || familiarWords.has(word.toLowerCase())) {
+    if (isIgnored || familiarWords.has(lemma)) {
       fragment.append(word);
     } else {
       const marker = document.createElement("span");
       marker.className = "nbf-potential-word";
       marker.textContent = word;
+      marker.dataset.lemma = lemma;
       fragment.append(marker);
       hasPotentialWord = true;
     }
@@ -77,21 +106,21 @@ function getScannableTextNodes(root) {
   return textNodes;
 }
 
-function highlightPotentialWordsIn(root, familiarWords) {
+function highlightPotentialWordsIn(root, familiarWords, lexicon) {
   for (const textNode of getScannableTextNodes(root)) {
-    highlightTextNode(textNode, familiarWords);
+    highlightTextNode(textNode, familiarWords, lexicon);
   }
 }
 
-function observeDynamicText(familiarWords) {
+function observeDynamicText(familiarWords, lexicon) {
   const observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
       if (mutation.type === "characterData") {
-        highlightPotentialWordsIn(mutation.target, familiarWords);
+        highlightPotentialWordsIn(mutation.target, familiarWords, lexicon);
         continue;
       }
       for (const node of mutation.addedNodes) {
-        highlightPotentialWordsIn(node, familiarWords);
+        highlightPotentialWordsIn(node, familiarWords, lexicon);
       }
     }
   });
@@ -102,24 +131,23 @@ function observeDynamicText(familiarWords) {
   });
 }
 
-async function loadInitialFamiliarWords() {
+async function loadProjectWords() {
   const response = await fetch(chrome.runtime.getURL("google-10000-english.txt"));
   if (!response.ok) throw new Error("无法加载初始熟词表");
   return (await response.text())
     .split(/\r?\n/u)
     .map((word) => word.trim().toLowerCase())
-    .filter(Boolean)
-    .slice(0, 1500);
+    .filter(Boolean);
 }
 
-async function getFamiliarWords() {
+async function getFamiliarWords(projectWords) {
   const stored = await chrome.storage.local.get({
     familiarWordsInitialized: false,
     familiarWords: [],
   });
   if (stored.familiarWordsInitialized) return new Set(stored.familiarWords);
 
-  const familiarWords = await loadInitialFamiliarWords();
+  const familiarWords = projectWords.slice(0, 1500);
   await chrome.storage.local.set({
     familiarWords,
     familiarWordsInitialized: true,
@@ -127,13 +155,55 @@ async function getFamiliarWords() {
   return new Set(familiarWords);
 }
 
+function showWordPopover(marker, familiarWords) {
+  document.querySelector(".nbf-word-popover")?.remove();
+  const lemma = marker.dataset.lemma;
+  if (!lemma) return;
+
+  const popover = document.createElement("div");
+  popover.className = "nbf-word-popover";
+  popover.setAttribute("role", "dialog");
+  popover.setAttribute("aria-label", "单词详情");
+
+  const managedAs = document.createElement("p");
+  managedAs.textContent = `按 ${lemma} 管理`;
+  const familiarButton = document.createElement("button");
+  familiarButton.type = "button";
+  familiarButton.textContent = "认识";
+  familiarButton.addEventListener("click", async () => {
+    const stored = await chrome.storage.local.get({ familiarWords: [] });
+    const nextFamiliarWords = [...new Set([...stored.familiarWords, lemma])];
+    await chrome.storage.local.set({ familiarWords: nextFamiliarWords });
+    familiarWords.add(lemma);
+    for (const match of document.querySelectorAll(".nbf-potential-word")) {
+      if (match.dataset.lemma === lemma) match.replaceWith(match.textContent ?? "");
+    }
+    popover.remove();
+  });
+  popover.append(managedAs, familiarButton);
+  document.body.append(popover);
+}
+
+function listenForWordClicks(familiarWords) {
+  document.addEventListener("click", (event) => {
+    const marker = event.target.closest?.(".nbf-potential-word");
+    if (marker) showWordPopover(marker, familiarWords);
+  });
+}
+
 async function highlightPotentialWordsOnEnabledSite() {
   const { enabledHosts } = await chrome.storage.local.get({ enabledHosts: [] });
   if (!enabledHosts.includes(location.hostname.toLowerCase())) return;
 
-  const familiarWords = await getFamiliarWords();
-  highlightPotentialWordsIn(document.body, familiarWords);
-  observeDynamicText(familiarWords);
+  const projectWords = await loadProjectWords();
+  const lexicon = new Set(projectWords);
+  const storedFamiliarWords = await getFamiliarWords(projectWords);
+  const familiarWords = new Set(
+    [...storedFamiliarWords].map((word) => getLemma(word, lexicon)),
+  );
+  highlightPotentialWordsIn(document.body, familiarWords, lexicon);
+  observeDynamicText(familiarWords, lexicon);
+  listenForWordClicks(familiarWords);
 }
 
 void highlightPotentialWordsOnEnabledSite();
