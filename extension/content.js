@@ -292,8 +292,7 @@ async function lookupDefinition(lemma) {
 let popoverCloseTimer = null;
 let openLemma = null;
 
-function positionPopover(popover, marker) {
-  const rect = marker.getBoundingClientRect();
+function positionPopoverAtRect(popover, rect) {
   const gap = 6;
   const viewportWidth = document.documentElement.clientWidth;
   const viewportHeight = document.documentElement.clientHeight;
@@ -305,6 +304,10 @@ function positionPopover(popover, marker) {
   if (top + height > viewportHeight - 8) top = Math.max(8, rect.top - height - gap);
   popover.style.left = `${left}px`;
   popover.style.top = `${top}px`;
+}
+
+function positionPopover(popover, marker) {
+  positionPopoverAtRect(popover, marker.getBoundingClientRect());
 }
 
 function renderLoadingDefinition(definitionArea) {
@@ -383,6 +386,19 @@ function findSentenceContainer(marker) {
   return current;
 }
 
+function extractSentence(fullText, start, end) {
+  const before = fullText.slice(0, start);
+  const after = fullText.slice(end);
+  return fullText.slice(getSentenceStart(before), end + getSentenceEnd(after)).trim();
+}
+
+function offsetFromContainerStart(container, node, offset) {
+  const range = document.createRange();
+  range.selectNodeContents(container);
+  range.setEnd(node, offset);
+  return range.toString().length;
+}
+
 function getContainingSentence(marker) {
   const container = findSentenceContainer(marker);
   const fallback = marker.textContent ?? "";
@@ -392,12 +408,27 @@ function getContainingSentence(marker) {
   range.selectNodeContents(container);
   range.setEndBefore(marker);
   const start = range.toString().length;
-  const wordLength = marker.textContent?.length ?? 0;
-  const before = fullText.slice(0, start);
-  const after = fullText.slice(start + wordLength);
-  const sentence = fullText
-    .slice(getSentenceStart(before), start + wordLength + getSentenceEnd(after))
-    .trim();
+  const end = start + (marker.textContent?.length ?? 0);
+  const sentence = extractSentence(fullText, start, end);
+  return sentence || fallback;
+}
+
+function getSentenceContainerForRange(range) {
+  let current = range.commonAncestorContainer;
+  if (current.nodeType === Node.TEXT_NODE) current = current.parentElement;
+  if (!current || current === document.body) return null;
+  if (!INLINE_DISPLAYS.has(getComputedStyle(current).display)) return current;
+  return findSentenceContainer(current);
+}
+
+function getContainingSentenceForRange(range, text) {
+  const container = getSentenceContainerForRange(range);
+  const fallback = text;
+  if (!container) return fallback;
+  const fullText = container.textContent ?? "";
+  const start = offsetFromContainerStart(container, range.startContainer, range.startOffset);
+  const end = offsetFromContainerStart(container, range.endContainer, range.endOffset);
+  const sentence = extractSentence(fullText, start, end);
   return sentence || fallback;
 }
 
@@ -447,7 +478,43 @@ function renderLlmError(area, message) {
   area.append(error);
 }
 
+async function translateViaLlm(target, sentence, area, onResult) {
+  const apiKey = await getDeepSeekApiKey();
+  if (!apiKey) {
+    renderLlmPrompt(area);
+    return;
+  }
+  const cacheKey = `${target}\n${sentence}`;
+  const cached = llmResultCache.get(cacheKey);
+  if (cached) {
+    renderLlmResult(area, cached);
+    onResult?.(cached);
+    return;
+  }
+  renderLlmLoading(area);
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "deepseek-translate",
+      target,
+      sentence,
+    });
+    if (!response?.ok) throw new Error(response?.error ?? "LLM 翻译失败");
+    const result = {
+      translation: response.translation,
+      explanation: response.explanation,
+    };
+    llmResultCache.set(cacheKey, result);
+    if (!area.isConnected) return;
+    renderLlmResult(area, result);
+    onResult?.(result);
+  } catch (error) {
+    if (!area.isConnected) return;
+    renderLlmError(area, error?.message ?? "LLM 翻译失败");
+  }
+}
+
 function showWordPopover(marker, familiarWords) {
+  if (document.querySelector(".nbf-phrase-popover")) return;
   const lemma = marker.dataset.lemma;
   if (!lemma) return;
   if (openLemma === lemma && document.querySelector(".nbf-word-popover")) return;
@@ -511,45 +578,12 @@ function showWordPopover(marker, familiarWords) {
     }
   }
 
-  llmButton.addEventListener("click", async () => {
-    const apiKey = await getDeepSeekApiKey();
-    if (!apiKey) {
-      renderLlmPrompt(llmArea);
-      return;
-    }
-    const target = lemma;
-    const sentence = getContainingSentence(marker);
-    const cacheKey = `${target}\n${sentence}`;
-    const cached = llmResultCache.get(cacheKey);
-    if (cached) {
-      renderLlmResult(llmArea, cached);
-      currentDefinition = cached.translation;
-      hasLlmDefinition = true;
-      refreshCollectButton();
-      return;
-    }
-    renderLlmLoading(llmArea);
-    try {
-      const response = await chrome.runtime.sendMessage({
-        type: "deepseek-translate",
-        target,
-        sentence,
-      });
-      if (!response?.ok) throw new Error(response?.error ?? "LLM 翻译失败");
-      const result = {
-        translation: response.translation,
-        explanation: response.explanation,
-      };
-      llmResultCache.set(cacheKey, result);
-      if (!llmArea.isConnected) return;
-      renderLlmResult(llmArea, result);
+  llmButton.addEventListener("click", () => {
+    void translateViaLlm(lemma, getContainingSentence(marker), llmArea, (result) => {
       currentDefinition = result.translation;
       hasLlmDefinition = true;
       refreshCollectButton();
-    } catch (error) {
-      if (!llmArea.isConnected) return;
-      renderLlmError(llmArea, error?.message ?? "LLM 翻译失败");
-    }
+    });
   });
 
   collectButton.addEventListener("click", async () => {
@@ -618,8 +652,12 @@ function cancelPopoverClose() {
 }
 
 function closeWordPopover() {
-  document.querySelector(".nbf-word-popover")?.remove();
+  document.querySelector(".nbf-word-popover:not(.nbf-phrase-popover)")?.remove();
   openLemma = null;
+}
+
+function closePhrasePopover() {
+  document.querySelector(".nbf-phrase-popover")?.remove();
 }
 
 function schedulePopoverClose() {
@@ -635,6 +673,7 @@ function listenForWordInteractions(familiarWords) {
     if (event.key !== "Escape") return;
     cancelPopoverClose();
     closeWordPopover();
+    closePhrasePopover();
   });
 
   document.addEventListener("mouseover", (event) => {
@@ -652,6 +691,7 @@ function listenForWordInteractions(familiarWords) {
 
   document.addEventListener("mouseout", (event) => {
     const target = event.target;
+    if (target.closest?.(".nbf-phrase-popover")) return;
     if (target.closest?.(".nbf-potential-word") || target.closest?.(".nbf-word-popover")) {
       schedulePopoverClose();
     }
@@ -661,6 +701,128 @@ function listenForWordInteractions(familiarWords) {
     const marker = event.target.closest?.(".nbf-potential-word");
     if (marker) showWordPopover(marker, familiarWords);
   });
+}
+
+const PHRASE_PATTERN = /^[A-Za-z]+(?:[-\s][A-Za-z]+)+$/u;
+
+function isEnglishPhrase(text) {
+  return PHRASE_PATTERN.test(text);
+}
+
+let phraseButton = null;
+let phraseSelection = null;
+
+function hidePhraseButton() {
+  phraseButton?.remove();
+  phraseButton = null;
+  phraseSelection = null;
+}
+
+function positionPhraseButton(button, rect) {
+  const gap = 6;
+  const viewportWidth = document.documentElement.clientWidth;
+  const viewportHeight = document.documentElement.clientHeight;
+  const width = button.offsetWidth;
+  const height = button.offsetHeight;
+  let left = rect.right - width;
+  if (left < 8) left = 8;
+  if (left + width > viewportWidth - 8) left = viewportWidth - width - 8;
+  let top = rect.top - height - gap;
+  if (top < 8) top = rect.bottom + gap;
+  if (top + height > viewportHeight - 8) top = viewportHeight - height - 8;
+  button.style.left = `${left}px`;
+  button.style.top = `${top}px`;
+}
+
+function getSelectedPhrase() {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
+  const range = selection.getRangeAt(0);
+  const text = selection.toString().trim();
+  if (!isEnglishPhrase(text)) return null;
+  let anchor = range.commonAncestorContainer;
+  if (anchor.nodeType === Node.TEXT_NODE) anchor = anchor.parentElement;
+  if (!anchor || !document.body.contains(anchor)) return null;
+  if (anchor.closest?.(EXCLUDED_SELECTOR)) return null;
+  const sentence = getContainingSentenceForRange(range, text);
+  const rect = range.getBoundingClientRect();
+  return { text, sentence, rect };
+}
+
+function showPhrasePopover(selection) {
+  cancelPopoverClose();
+  closeWordPopover();
+  closePhrasePopover();
+
+  const popover = document.createElement("div");
+  popover.className = "nbf-word-popover nbf-phrase-popover";
+  popover.setAttribute("role", "dialog");
+  popover.setAttribute("aria-label", "短语详情");
+
+  const phrase = document.createElement("p");
+  phrase.className = "nbf-popover-word";
+  phrase.textContent = selection.text;
+
+  const llmButton = document.createElement("button");
+  llmButton.type = "button";
+  llmButton.className = "nbf-llm-button";
+  llmButton.textContent = "专业术语翻译";
+
+  const llmArea = document.createElement("div");
+  llmArea.className = "nbf-llm-area";
+
+  llmButton.addEventListener("click", () => {
+    void translateViaLlm(selection.text, selection.sentence, llmArea);
+  });
+
+  popover.append(phrase, llmButton, llmArea);
+  document.body.append(popover);
+  positionPopoverAtRect(popover, selection.rect);
+
+  const outsideHandler = (event) => {
+    if (popover.contains(event.target)) return;
+    closePhrasePopover();
+    document.removeEventListener("mousedown", outsideHandler, true);
+  };
+  document.addEventListener("mousedown", outsideHandler, true);
+}
+
+function showPhraseButton(selection) {
+  if (phraseButton) {
+    positionPhraseButton(phraseButton, selection.rect);
+    phraseSelection = selection;
+    return;
+  }
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "nbf-phrase-button";
+  button.textContent = "翻译";
+  button.setAttribute("aria-label", "翻译所选短语");
+  button.addEventListener("mousedown", (event) => event.preventDefault());
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const currentSelection = phraseSelection ?? selection;
+    hidePhraseButton();
+    showPhrasePopover(currentSelection);
+  });
+  document.body.append(button);
+  positionPhraseButton(button, selection.rect);
+  phraseButton = button;
+  phraseSelection = selection;
+}
+
+function updatePhraseButton() {
+  const selection = getSelectedPhrase();
+  if (!selection) {
+    hidePhraseButton();
+    return;
+  }
+  showPhraseButton(selection);
+}
+
+function listenForPhraseSelection() {
+  document.addEventListener("selectionchange", updatePhraseButton);
 }
 
 async function highlightPotentialWordsOnEnabledSite() {
@@ -677,6 +839,7 @@ async function highlightPotentialWordsOnEnabledSite() {
   highlightPotentialWordsIn(document.body, familiarWords, lexicon);
   observeDynamicText(familiarWords, lexicon);
   listenForWordInteractions(familiarWords);
+  listenForPhraseSelection();
 }
 
 void highlightPotentialWordsOnEnabledSite();

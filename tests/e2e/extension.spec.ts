@@ -146,6 +146,8 @@ test.beforeAll(async () => {
         <p id="ambiguous-forms">Use uses News new Do does Doe Go went Man men Woman women Foot feet</p>
         <p id="sentence-copy">The first uses Quizzacious here. The second uses Quizzacious there.</p>
         <p id="inline-copy">The <em>Quizzacious</em> cache helps.</p>
+        <p id="phrase-copy">Spring Boot simplifies application setup.</p>
+        <p id="phrase-hyphen">Spring-Boot simplifies configuration.</p>
         <p id="identifiers">12345 https://example.com/quizzacious useState foo_bar user123</p>
         <div id="dynamic-copy"></div>
         <p id="dynamic-update">the</p>
@@ -218,6 +220,7 @@ async function enableDocsHostAndOpenPage(
   );
   const page = await context.newPage();
   await page.goto(`http://docs.localhost:${port}/guide`);
+  await expect(page.locator(".nbf-potential-word")).not.toHaveCount(0);
   return { options, page };
 }
 
@@ -250,6 +253,42 @@ async function configureDeepSeek(
 async function openQuizzaciousDialog(page: Page, target: string, occurrence = 0) {
   await page.locator(target, { hasText: "Quizzacious" }).nth(occurrence).click();
   return page.getByRole("dialog", { name: "单词详情" });
+}
+
+async function selectPhrase(page: Page, containerSelector: string, text: string) {
+  await page.evaluate(
+    ({ containerSelector, text }) => {
+      const root = document.querySelector(containerSelector);
+      if (!root) throw new Error(`container not found: ${containerSelector}`);
+      const container: Element = root;
+      const fullText = container.textContent ?? "";
+      const startIndex = fullText.indexOf(text);
+      if (startIndex === -1) throw new Error(`text not found: ${text}`);
+      const endIndex = startIndex + text.length;
+
+      function locate(offset: number): { node: Node; offset: number } {
+        const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+        let node: Node | null;
+        let remaining = offset;
+        while ((node = walker.nextNode())) {
+          const length = (node.nodeValue ?? "").length;
+          if (remaining <= length) return { node, offset: remaining };
+          remaining -= length;
+        }
+        throw new Error("offset out of range");
+      }
+
+      const start = locate(startIndex);
+      const end = locate(endIndex);
+      const range = document.createRange();
+      range.setStart(start.node, start.offset);
+      range.setEnd(end.node, end.offset);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    },
+    { containerSelector, text },
+  );
 }
 
 test("enables only the entered full hostname and keeps it after reload", async ({
@@ -1137,4 +1176,160 @@ test("keeps the LLM result when a slow dictionary lookup finishes after the LLM"
     definition: "术语释义",
     mastered: false,
   });
+});
+
+test("shows a phrase translate button only on enabled sites and opens the popover without calling the LLM", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: {},
+  });
+  await configureDeepSeek(options, {
+    apiKey: "sk-test",
+    apiUrl: `http://docs.localhost:${port}/deepseek`,
+  });
+
+  await selectPhrase(page, "#phrase-copy", "Spring Boot");
+  const phraseButton = page.getByRole("button", { name: "翻译所选短语" });
+  await expect(phraseButton).toBeVisible();
+
+  await phraseButton.click();
+  const dialog = page.getByRole("dialog", { name: "短语详情" });
+  await expect(dialog).toContainText("Spring Boot");
+  expect(deepseekCalls).toEqual([]);
+
+  const disabled = await context.newPage();
+  await disabled.goto(`http://localhost:${port}/guide`);
+  await selectPhrase(disabled, "#phrase-copy", "Spring Boot");
+  await expect(disabled.getByRole("button", { name: "翻译所选短语" })).toHaveCount(0);
+  await disabled.close();
+});
+
+test("translates a selected multi-word phrase only on explicit click with the phrase and its sentence", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: {},
+  });
+  await configureDeepSeek(options, {
+    apiKey: "sk-test-123",
+    apiUrl: `http://docs.localhost:${port}/deepseek`,
+  });
+
+  await selectPhrase(page, "#phrase-copy", "Spring Boot");
+  await page.getByRole("button", { name: "翻译所选短语" }).click();
+  const dialog = page.getByRole("dialog", { name: "短语详情" });
+  await expect(dialog).toContainText("Spring Boot");
+  expect(deepseekCalls).toEqual([]);
+
+  await dialog.getByRole("button", { name: "专业术语翻译" }).click();
+  await expect(dialog).toContainText("术语译文");
+  await expect(dialog).toContainText("当前语境下的一句话解释");
+  expect(deepseekCalls).toHaveLength(1);
+  expect(deepseekCalls[0]).toMatchObject({
+    target: "Spring Boot",
+    sentence: "Spring Boot simplifies application setup.",
+    model: "deepseek-v4-flash",
+    authorization: "Bearer sk-test-123",
+  });
+});
+
+test("translates a hyphenated multi-word term selected on an enabled site", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: {},
+  });
+  await configureDeepSeek(options, {
+    apiKey: "sk-test-123",
+    apiUrl: `http://docs.localhost:${port}/deepseek`,
+  });
+
+  await selectPhrase(page, "#phrase-hyphen", "Spring-Boot");
+  await page.getByRole("button", { name: "翻译所选短语" }).click();
+  const dialog = page.getByRole("dialog", { name: "短语详情" });
+  await expect(dialog).toContainText("Spring-Boot");
+  await dialog.getByRole("button", { name: "专业术语翻译" }).click();
+  await expect(dialog).toContainText("术语译文");
+  expect(deepseekCalls).toHaveLength(1);
+  expect(deepseekCalls[0]).toMatchObject({
+    target: "Spring-Boot",
+    sentence: "Spring-Boot simplifies configuration.",
+    model: "deepseek-v4-flash",
+    authorization: "Bearer sk-test-123",
+  });
+});
+
+test("phrase translation never writes a vocab book entry or changes familiar words", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: {},
+  });
+  await configureDeepSeek(options, {
+    apiKey: "sk-test",
+    apiUrl: `http://docs.localhost:${port}/deepseek`,
+  });
+  const before = await readStorage(options);
+
+  await selectPhrase(page, "#phrase-copy", "Spring Boot");
+  await page.getByRole("button", { name: "翻译所选短语" }).click();
+  const dialog = page.getByRole("dialog", { name: "短语详情" });
+  await dialog.getByRole("button", { name: "专业术语翻译" }).click();
+  await expect(dialog).toContainText("术语译文");
+
+  const after = await readStorage(options);
+  expect(after).not.toHaveProperty("vocabBook");
+  expect(after.familiarWords).toEqual(before.familiarWords);
+});
+
+test("phrase translation reuses the missing-key prompt without calling the LLM", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: {},
+  });
+  await configureDeepSeek(options, {});
+
+  await selectPhrase(page, "#phrase-copy", "Spring Boot");
+  await page.getByRole("button", { name: "翻译所选短语" }).click();
+  const dialog = page.getByRole("dialog", { name: "短语详情" });
+  await dialog.getByRole("button", { name: "专业术语翻译" }).click();
+  await expect(dialog).toContainText("尚未配置 DeepSeek API Key");
+  await expect(dialog.getByRole("button", { name: "前往设置" })).toBeVisible();
+  expect(deepseekCalls).toEqual([]);
+});
+
+test("shows a clear error for phrase translation and retries only on a new explicit click", async ({
+  context,
+  extensionId,
+}) => {
+  deepseekStatus = 500;
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: {},
+  });
+  await configureDeepSeek(options, {
+    apiKey: "sk-test",
+    apiUrl: `http://docs.localhost:${port}/deepseek`,
+  });
+
+  await selectPhrase(page, "#phrase-copy", "Spring Boot");
+  await page.getByRole("button", { name: "翻译所选短语" }).click();
+  const dialog = page.getByRole("dialog", { name: "短语详情" });
+  await dialog.getByRole("button", { name: "专业术语翻译" }).click();
+  await expect(dialog).toContainText("DeepSeek 返回 HTTP 500");
+  expect(deepseekCalls).toHaveLength(1);
+
+  await page.waitForTimeout(500);
+  expect(deepseekCalls).toHaveLength(1);
+
+  deepseekStatus = 200;
+  await dialog.getByRole("button", { name: "专业术语翻译" }).click();
+  await expect(dialog).toContainText("术语译文");
+  expect(deepseekCalls).toHaveLength(2);
 });
