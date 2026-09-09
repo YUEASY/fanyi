@@ -703,10 +703,12 @@ function listenForWordInteractions() {
   });
 }
 
-const PHRASE_PATTERN = /^[A-Za-z]+(?:[-\s][A-Za-z]+)+$/u;
+const PHRASE_CHARACTER_PATTERN = /^[A-Za-z\s\p{P}]+$/u;
+const PHRASE_WORD_PATTERN = /[A-Za-z]+/gu;
 
 function isEnglishPhrase(text) {
-  return PHRASE_PATTERN.test(text);
+  if (!PHRASE_CHARACTER_PATTERN.test(text)) return false;
+  return (text.match(PHRASE_WORD_PATTERN) ?? []).length >= 2;
 }
 
 let phraseButton = null;

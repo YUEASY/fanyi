@@ -7,29 +7,54 @@
     <link rel="stylesheet" href="options.css" />
   </head>
   <body>
-    <main>
-      <h1>启用网站</h1>
-      <form id="site-form">
-        <label for="site-url">页面网址</label>
-        <div class="controls">
-          <input id="site-url" name="site-url" type="url" placeholder="https://docs.example.com/guide" required />
-          <button type="submit">启用网站</button>
-        </div>
-        <p id="error" role="alert" hidden></p>
-      </form>
-      <ul id="enabled-hosts" aria-label="已启用网站"></ul>
-
-      <section aria-labelledby="familiar-heading">
-        <h2 id="familiar-heading">熟词表</h2>
-        <label for="familiar-search">搜索熟词</label>
-        <input id="familiar-search" type="search" autocomplete="off" />
-        <ul id="familiar-words" aria-label="熟词表"></ul>
+    <aside class="sidebar">
+      <a class="brand" href="#main-content"><span class="brand-mark">译</span><span>牛逼翻译<small>阅读 · 理解 · 积累</small></span></a>
+      <div class="nav-caption">工作空间</div>
+      <nav aria-label="设置导航">
+        <a href="#sites">◎　启用网站</a>
+        <a href="#familiar">✓　熟词表</a>
+        <a href="#vocabulary">▤　生词本</a>
+        <div class="nav-caption">偏好设置</div>
+        <a href="#translation">✧　翻译服务</a>
+        <a href="#data">⇅　数据管理</a>
+      </nav>
+      <div class="sidebar-footer">● 你的个人阅读空间<small>让每一次阅读，都有所积累。</small></div>
+    </aside>
+    <main id="main-content">
+      <header class="page-header">
+        <div class="eyebrow">牛逼翻译 / 工作空间</div>
+        <h1>专注阅读，慢慢积累。</h1>
+        <p>在英文网页中理解新词，把知识留在自己的词库里。</p>
+      </header>
+      <section id="sites" aria-labelledby="sites-heading">
+        <h2 id="sites-heading">启用网站</h2>
+        <p class="section-description">添加常读的网站，自动高亮其中的潜在生词。</p>
+        <form id="site-form">
+          <label for="site-url">页面网址</label>
+          <div class="controls">
+            <input id="site-url" name="site-url" type="url" placeholder="https://docs.example.com/guide" required />
+            <button type="submit">启用网站</button>
+          </div>
+          <p id="error" role="alert" hidden></p>
+        </form>
+        <ul id="enabled-hosts" aria-label="已启用网站"></ul>
+        <p class="empty-state">还没有启用网站，添加一个网址开始阅读。</p>
       </section>
 
-      <section aria-labelledby="vocab-heading">
+      <section id="familiar" aria-labelledby="familiar-heading">
+        <h2 id="familiar-heading">熟词表</h2>
+        <p class="section-description">已经认识的单词，阅读时不再打扰。</p>
+        <label for="familiar-search">搜索熟词</label>
+        <input placeholder="搜索熟词…" id="familiar-search" type="search" autocomplete="off" />
+        <ul id="familiar-words" aria-label="熟词表"></ul>
+        <p class="empty-state">暂无匹配的熟词，试试调整搜索或在阅读中积累新词。</p>
+      </section>
+
+      <section id="vocabulary" aria-labelledby="vocab-heading">
         <h2 id="vocab-heading">生词本</h2>
+        <p class="section-description">收藏值得记住的词，按自己的节奏掌握。</p>
         <label for="vocab-search">搜索生词</label>
-        <input id="vocab-search" type="search" autocomplete="off" />
+        <input placeholder="搜索生词…" id="vocab-search" type="search" autocomplete="off" />
         <fieldset class="mastery-filter">
           <legend>掌握状态</legend>
           <label><input type="radio" name="mastery-filter" value="all" checked />全部</label>
@@ -37,10 +62,12 @@
           <label><input type="radio" name="mastery-filter" value="unmastered" />未掌握</label>
         </fieldset>
         <ul id="vocab-book" aria-label="生词本"></ul>
+        <p class="empty-state">暂无匹配的生词，试试调整搜索或在阅读中积累新词。</p>
       </section>
 
-      <section aria-labelledby="deepseek-heading">
+      <section id="translation" aria-labelledby="deepseek-heading">
         <h2 id="deepseek-heading">DeepSeek API Key</h2>
+        <p class="section-description">连接翻译服务，结合上下文理解单词与短语。</p>
         <label for="deepseek-key">API Key</label>
         <div class="controls">
           <input id="deepseek-key" type="password" autocomplete="off" placeholder="sk-…" />
@@ -50,8 +77,9 @@
         <p id="deepseek-status" role="status" hidden></p>
       </section>
 
-      <section aria-labelledby="data-heading">
+      <section id="data" aria-labelledby="data-heading">
         <h2 id="data-heading">数据导入导出</h2>
+        <p class="section-description">备份学习数据，方便迁移与恢复。</p>
         <button id="export-data" type="button">导出数据</button>
         <label for="import-file">选择备份文件</label>
         <input id="import-file" type="file" accept="application/json,.json" />

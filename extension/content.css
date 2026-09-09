@@ -5,7 +5,6 @@
   text-decoration-thickness: 2px;
   text-underline-offset: 3px;
 }
-
 .nbf-word-popover {
   position: fixed;
   z-index: 2147483647;
@@ -19,29 +18,23 @@
   box-shadow: 0 4px 16px rgb(0 0 0 / 18%);
   font: 14px/1.5 system-ui, sans-serif;
 }
-
 .nbf-word-popover p {
   margin: 0 0 8px;
 }
-
 .nbf-word-popover p:last-child {
   margin-bottom: 0;
 }
-
 .nbf-popover-word {
   font-weight: 600;
   color: #1a73e8;
 }
-
 .nbf-definition {
   white-space: pre-wrap;
 }
-
 .nbf-definition-error {
   color: #c5221f;
   white-space: pre-wrap;
 }
-
 .nbf-word-popover button {
   padding: 6px 14px;
   border: 0;
@@ -50,57 +43,46 @@
   color: #fff;
   cursor: pointer;
 }
-
 .nbf-word-popover button:disabled {
   background: #e8eaed;
   color: #9aa0a6;
   cursor: not-allowed;
 }
-
 .nbf-definition-error + button {
   background: #fff;
   color: #1a73e8;
   border: 1px solid #dadce0;
 }
-
 .nbf-actions {
   display: flex;
   gap: 8px;
 }
-
 .nbf-collect-hint {
   margin-top: 8px;
   color: #9aa0a6;
   font-size: 12px;
 }
-
 .nbf-llm-button {
   margin-top: 8px;
 }
-
 .nbf-llm-area {
   margin-top: 8px;
 }
-
 .nbf-llm-translation {
   font-weight: 600;
 }
-
 .nbf-llm-explanation {
   color: #5f6368;
   white-space: pre-wrap;
 }
-
 .nbf-llm-error {
   color: #c5221f;
   white-space: pre-wrap;
 }
-
 .nbf-llm-prompt,
 .nbf-llm-loading {
   color: #5f6368;
 }
-
 .nbf-phrase-button {
   position: fixed;
   z-index: 2147483646;
@@ -112,4 +94,59 @@
   font: 13px/1.4 system-ui, sans-serif;
   cursor: pointer;
   box-shadow: 0 2px 10px rgb(0 0 0 / 22%);
+}
+/* Match the quiet, neutral workspace styling. */
+.nbf-word-popover {
+  border-color: #e3e3dc;
+  border-radius: 14px;
+  padding: 18px;
+  box-shadow: 0 8px 32px rgb(30 30 20 / 12%), 0 2px 6px rgb(30 30 20 / 4%);
+  color: #30302b;
+  max-width: min(360px, calc(100vw - 24px));
+  min-width: min(200px, calc(100vw - 24px));
+  box-sizing: border-box;
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.nbf-popover-word {
+  color: #292926;
+  font-size: 18px;
+  letter-spacing: -.02em;
+}
+.nbf-word-popover button, .nbf-phrase-button {
+  background: #292926;
+  border-radius: 8px;
+  font: 12px/1.5 system-ui, sans-serif;
+  padding: 8px 12px;
+}
+.nbf-word-popover button:hover, .nbf-phrase-button:hover {
+  background: #45453f;
+}
+.nbf-word-popover button:focus-visible, .nbf-phrase-button:focus-visible {
+  outline: 2px solid #858578;
+  outline-offset: 3px;
+}
+.nbf-word-popover button:disabled {
+  background: #efefea;
+  color: #99998f;
+}
+.nbf-definition-error + button {
+  color: #45453f;
+  background: #f7f7f3;
+  border-color: #e4e4dc;
+}
+.nbf-actions {
+  flex-wrap: wrap;
+  padding-top: 10px;
+  margin-top: 12px;
+  border-top: 1px solid #efefe9;
+}
+.nbf-llm-area {
+  border-top: 1px solid #efefe9;
+  padding-top: 12px;
+  margin-top: 12px;
+}
+.nbf-llm-explanation, .nbf-llm-prompt, .nbf-llm-loading {
+  color: #77776e;
 }

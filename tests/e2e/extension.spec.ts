@@ -176,6 +176,7 @@ test.beforeAll(async () => {
         <p id="inline-copy">The <em>Quizzacious</em> cache helps.</p>
         <p id="phrase-copy">Spring Boot simplifies application setup.</p>
         <p id="phrase-hyphen">Spring-Boot simplifies configuration.</p>
+        <p id="phrase-punctuation">Spring Boot, simplifies application setup.</p>
         <p id="identifiers">12345 https://example.com/quizzacious useState foo_bar user123</p>
         <div id="dynamic-copy"></div>
         <p id="dynamic-update">the</p>
@@ -1315,6 +1316,18 @@ test("translates a hyphenated multi-word term selected on an enabled site", asyn
     model: "deepseek-v4-flash",
     authorization: "Bearer sk-test-123",
   });
+});
+
+test("offers phrase translation when the selected text contains punctuation", async ({
+  context,
+  extensionId,
+}) => {
+  const { page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: {},
+  });
+
+  await selectPhrase(page, "#phrase-punctuation", "Spring Boot,");
+  await expect(page.getByRole("button", { name: "翻译所选短语" })).toBeVisible();
 });
 
 test("phrase translation never writes a vocab book entry or changes familiar words", async ({
