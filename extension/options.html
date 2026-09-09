@@ -49,6 +49,22 @@
         </div>
         <p id="deepseek-status" role="status" hidden></p>
       </section>
+
+      <section aria-labelledby="data-heading">
+        <h2 id="data-heading">数据导入导出</h2>
+        <button id="export-data" type="button">导出数据</button>
+        <label for="import-file">选择备份文件</label>
+        <input id="import-file" type="file" accept="application/json,.json" />
+        <div id="import-preview" hidden>
+          <p id="import-summary"></p>
+          <p id="import-warning"></p>
+          <div class="controls">
+            <button id="import-confirm" type="button">确认导入</button>
+            <button id="import-cancel" type="button">取消</button>
+          </div>
+        </div>
+        <p id="import-status" aria-live="polite" hidden></p>
+      </section>
     </main>
     <script src="options.js"></script>
   </body>

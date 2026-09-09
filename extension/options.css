@@ -132,8 +132,35 @@ button {
   color: #5f6368;
 }
 
-#deepseek-delete {
+#deepseek-delete,
+#import-cancel {
   background: #fff;
   border: 1px solid #bdc1c6;
   color: #202124;
+}
+
+#import-file {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+#import-preview {
+  background: #fff;
+  border: 1px solid #dadce0;
+  border-radius: 6px;
+  margin-top: 12px;
+  padding: 12px;
+}
+
+#import-summary {
+  font-weight: 600;
+  margin-top: 0;
+}
+
+#import-warning {
+  color: #b3261e;
+}
+
+#import-status {
+  color: #5f6368;
 }

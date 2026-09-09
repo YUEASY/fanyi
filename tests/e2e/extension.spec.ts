@@ -1,6 +1,6 @@
 import { test as base, chromium, expect, type BrowserContext, type Page } from "@playwright/test";
 import { createServer, type Server } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -10,6 +10,7 @@ async function launchExtension(userDataDir: string) {
     channel: "chromium",
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE,
     headless: true,
+    acceptDownloads: true,
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -190,6 +191,32 @@ async function readStorage(options: Page) {
     };
     return extensionGlobal.chrome.storage.local.get();
   });
+}
+
+async function downloadBackupJson(options: Page): Promise<Record<string, unknown>> {
+  const downloadPromise = options.waitForEvent("download");
+  await options.getByRole("button", { name: "导出数据" }).click();
+  const download = await downloadPromise;
+  const content = await readFile(await download.path(), "utf-8");
+  return JSON.parse(content) as Record<string, unknown>;
+}
+
+async function setImportFile(options: Page, content: string | Record<string, unknown>) {
+  const text = typeof content === "string" ? content : JSON.stringify(content);
+  await options.setInputFiles("#import-file", {
+    name: "backup.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(text, "utf-8"),
+  });
+}
+
+async function seedStorage(options: Page, data: Record<string, unknown>) {
+  await options.evaluate(async (value) => {
+    const extensionGlobal = globalThis as typeof globalThis & {
+      chrome: { storage: { local: { set(value: Record<string, unknown>): Promise<void> } } };
+    };
+    await extensionGlobal.chrome.storage.local.set(value);
+  }, data);
 }
 
 async function enableDocsHostAndOpenPage(
@@ -1332,4 +1359,230 @@ test("shows a clear error for phrase translation and retries only on a new expli
   await dialog.getByRole("button", { name: "专业术语翻译" }).click();
   await expect(dialog).toContainText("术语译文");
   expect(deepseekCalls).toHaveLength(2);
+});
+
+test("exports a single versioned JSON with only familiar words, vocab book and enabled hosts", async ({
+  context,
+  extensionId,
+}) => {
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/options.html`);
+  await seedStorage(options, {
+    familiarWords: ["work", "go"],
+    vocabBook: { quizzacious: { definition: "古怪的", mastered: false } },
+    enabledHosts: ["docs.localhost"],
+    deepseekApiKey: "sk-secret",
+  });
+
+  const backup = await downloadBackupJson(options);
+  expect(backup).toEqual({
+    version: 1,
+    familiarWords: ["work", "go"],
+    vocabBook: { quizzacious: { definition: "古怪的", mastered: false } },
+    enabledHosts: ["docs.localhost"],
+  });
+  expect(backup).not.toHaveProperty("deepseekApiKey");
+  expect(backup).not.toHaveProperty("settings");
+});
+
+test("previews import counts and warning, then fully replaces data and preserves the API key", async ({
+  context,
+  extensionId,
+}) => {
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/options.html`);
+  await seedStorage(options, {
+    familiarWords: ["work"],
+    vocabBook: { quizzacious: { definition: "古怪的", mastered: false } },
+    enabledHosts: ["docs.localhost"],
+    deepseekApiKey: "sk-current",
+  });
+  await options.reload();
+
+  await setImportFile(options, {
+    version: 1,
+    familiarWords: ["alpha", "beta"],
+    vocabBook: { gamma: { definition: "伽马", mastered: true } },
+    enabledHosts: ["example.com", "example.org"],
+  });
+
+  const preview = options.locator("#import-preview");
+  await expect(preview).toBeVisible();
+  await expect(preview).toContainText("熟词表 2 个、生词本 1 个、启用网站 2 个");
+  await expect(preview).toContainText("导入将完全替换当前的学习数据");
+
+  await options.getByRole("button", { name: "确认导入" }).click();
+  await expect(options.locator("#import-status")).toContainText("已导入学习数据");
+
+  const storage = await readStorage(options);
+  expect(storage.familiarWords).toEqual(["alpha", "beta"]);
+  expect(storage.vocabBook).toEqual({ gamma: { definition: "伽马", mastered: true } });
+  expect(storage.enabledHosts).toEqual(["example.com", "example.org"]);
+  expect(storage.deepseekApiKey).toBe("sk-current");
+  expect(Object.keys(storage)).not.toContain("backup");
+
+  await expect(options.getByText("alpha", { exact: true })).toBeVisible();
+  await expect(options.getByText("example.com", { exact: true })).toBeVisible();
+});
+
+test("cancelling an import leaves current data unchanged", async ({ context, extensionId }) => {
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/options.html`);
+  await seedStorage(options, {
+    familiarWords: ["work"],
+    vocabBook: { quizzacious: { definition: "古怪的", mastered: false } },
+    enabledHosts: ["docs.localhost"],
+  });
+  await options.reload();
+  const before = await readStorage(options);
+
+  await setImportFile(options, {
+    version: 1,
+    familiarWords: ["other"],
+    vocabBook: {},
+    enabledHosts: [],
+  });
+  await expect(options.locator("#import-preview")).toBeVisible();
+  await options.getByRole("button", { name: "取消" }).click();
+  await expect(options.locator("#import-preview")).toBeHidden();
+  await expect(options.locator("#import-status")).toContainText("已取消导入");
+
+  expect(await readStorage(options)).toEqual(before);
+});
+
+test("rejects invalid JSON without modifying current data", async ({ context, extensionId }) => {
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/options.html`);
+  await seedStorage(options, {
+    familiarWords: ["work"],
+    vocabBook: { quizzacious: { definition: "古怪的", mastered: false } },
+    enabledHosts: ["docs.localhost"],
+  });
+  await options.reload();
+  const before = await readStorage(options);
+
+  await setImportFile(options, "{ not valid json");
+  await expect(options.locator("#import-status")).toContainText("备份文件不是有效的 JSON");
+  await expect(options.locator("#import-preview")).toBeHidden();
+  expect(await readStorage(options)).toEqual(before);
+});
+
+test("rejects an unsupported backup version without modifying current data", async ({
+  context,
+  extensionId,
+}) => {
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/options.html`);
+  await seedStorage(options, {
+    familiarWords: ["work"],
+    vocabBook: { quizzacious: { definition: "古怪的", mastered: false } },
+    enabledHosts: ["docs.localhost"],
+  });
+  await options.reload();
+  const before = await readStorage(options);
+
+  await setImportFile(options, {
+    version: 999,
+    familiarWords: [],
+    vocabBook: {},
+    enabledHosts: [],
+  });
+  await expect(options.locator("#import-status")).toContainText("不支持的备份版本");
+  await expect(options.locator("#import-preview")).toBeHidden();
+  expect(await readStorage(options)).toEqual(before);
+});
+
+test("rejects any invalid data atomically without partial import", async ({
+  context,
+  extensionId,
+}) => {
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/options.html`);
+  await seedStorage(options, {
+    familiarWords: ["work"],
+    vocabBook: { quizzacious: { definition: "古怪的", mastered: false } },
+    enabledHosts: ["docs.localhost"],
+  });
+  await options.reload();
+  const before = await readStorage(options);
+
+  await setImportFile(options, {
+    version: 1,
+    familiarWords: ["good"],
+    vocabBook: { bad: { mastered: true } },
+    enabledHosts: [],
+  });
+  await expect(options.locator("#import-status")).toContainText("生词本数据无效");
+  expect(await readStorage(options)).toEqual(before);
+
+  await setImportFile(options, {
+    version: 1,
+    familiarWords: "not-an-array",
+    vocabBook: {},
+    enabledHosts: [],
+  });
+  await expect(options.locator("#import-status")).toContainText("熟词表数据无效");
+  expect(await readStorage(options)).toEqual(before);
+});
+
+test("imports an empty backup to clear all three data sets after a clear warning", async ({
+  context,
+  extensionId,
+}) => {
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/options.html`);
+  await seedStorage(options, {
+    familiarWords: ["work"],
+    vocabBook: { quizzacious: { definition: "古怪的", mastered: false } },
+    enabledHosts: ["docs.localhost"],
+    deepseekApiKey: "sk-keep",
+  });
+  await options.reload();
+
+  await setImportFile(options, {
+    version: 1,
+    familiarWords: [],
+    vocabBook: {},
+    enabledHosts: [],
+  });
+  const preview = options.locator("#import-preview");
+  await expect(preview).toContainText("熟词表 0 个、生词本 0 个、启用网站 0 个");
+  await expect(preview).toContainText("备份中三个集合均为空，导入将清空熟词表、生词本和启用网站");
+
+  await options.getByRole("button", { name: "确认导入" }).click();
+  const storage = await readStorage(options);
+  expect(storage.familiarWords).toEqual([]);
+  expect(storage.vocabBook).toEqual({});
+  expect(storage.enabledHosts).toEqual([]);
+  expect(storage.deepseekApiKey).toBe("sk-keep");
+});
+
+test("round-trips learning data through export and import", async ({ context, extensionId }) => {
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/options.html`);
+  await seedStorage(options, {
+    familiarWords: ["work", "go"],
+    vocabBook: { quizzacious: { definition: "古怪的", mastered: false } },
+    enabledHosts: ["docs.localhost"],
+    deepseekApiKey: "sk-keep",
+  });
+  await options.reload();
+
+  const backup = await downloadBackupJson(options);
+
+  await seedStorage(options, {
+    familiarWords: [],
+    vocabBook: {},
+    enabledHosts: [],
+  });
+  await options.reload();
+
+  await setImportFile(options, backup);
+  await options.getByRole("button", { name: "确认导入" }).click();
+
+  const storage = await readStorage(options);
+  expect(storage.familiarWords).toEqual(["work", "go"]);
+  expect(storage.vocabBook).toEqual({ quizzacious: { definition: "古怪的", mastered: false } });
+  expect(storage.enabledHosts).toEqual(["docs.localhost"]);
+  expect(storage.deepseekApiKey).toBe("sk-keep");
 });
