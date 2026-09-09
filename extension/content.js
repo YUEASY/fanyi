@@ -5,6 +5,39 @@ const IRREGULAR_FORMS = new Map([
   ["were", "be"], ["been", "be"], ["being", "be"],
   ["has", "have"], ["had", "have"], ["having", "have"],
   ["does", "do"], ["did", "do"], ["doing", "do"],
+  ["ate", "eat"], ["eaten", "eat"], ["became", "become"],
+  ["began", "begin"], ["begun", "begin"], ["broke", "break"],
+  ["broken", "break"], ["brought", "bring"], ["bought", "buy"],
+  ["caught", "catch"], ["chose", "choose"], ["chosen", "choose"],
+  ["came", "come"], ["dealt", "deal"], ["dug", "dig"],
+  ["drew", "draw"], ["drawn", "draw"], ["drank", "drink"],
+  ["drunk", "drink"], ["drove", "drive"], ["driven", "drive"],
+  ["fell", "fall"], ["fallen", "fall"], ["fed", "feed"],
+  ["felt", "feel"], ["fought", "fight"], ["found", "find"],
+  ["flew", "fly"], ["flown", "fly"], ["forgot", "forget"],
+  ["forgotten", "forget"], ["forgave", "forgive"], ["forgiven", "forgive"],
+  ["froze", "freeze"], ["frozen", "freeze"], ["got", "get"],
+  ["gotten", "get"], ["gave", "give"], ["given", "give"],
+  ["went", "go"], ["gone", "go"], ["grew", "grow"], ["grown", "grow"],
+  ["heard", "hear"], ["held", "hold"], ["kept", "keep"],
+  ["knew", "know"], ["known", "know"], ["left", "leave"],
+  ["lost", "lose"], ["made", "make"], ["met", "meet"],
+  ["paid", "pay"], ["rode", "ride"], ["ridden", "ride"],
+  ["ran", "run"], ["said", "say"], ["saw", "see"], ["seen", "see"],
+  ["sold", "sell"], ["sent", "send"], ["shook", "shake"],
+  ["shaken", "shake"], ["showed", "show"], ["shown", "show"],
+  ["sang", "sing"], ["sung", "sing"], ["sat", "sit"],
+  ["slept", "sleep"], ["spoke", "speak"], ["spoken", "speak"],
+  ["spent", "spend"], ["stood", "stand"], ["stole", "steal"],
+  ["stolen", "steal"], ["swam", "swim"], ["swum", "swim"],
+  ["took", "take"], ["taken", "take"], ["taught", "teach"],
+  ["told", "tell"], ["thought", "think"], ["threw", "throw"],
+  ["thrown", "throw"], ["understood", "understand"], ["woke", "wake"],
+  ["woken", "wake"], ["wore", "wear"], ["worn", "wear"],
+  ["won", "win"], ["wrote", "write"], ["written", "write"],
+  ["children", "child"], ["feet", "foot"], ["geese", "goose"],
+  ["men", "man"], ["mice", "mouse"], ["people", "person"],
+  ["teeth", "tooth"], ["women", "woman"],
 ]);
 const UNINFLECTED_WORDS = new Set(["news"]);
 
@@ -189,9 +222,18 @@ function showWordPopover(marker, familiarWords) {
   familiarButton.type = "button";
   familiarButton.textContent = "认识";
   familiarButton.addEventListener("click", async () => {
-    const stored = await chrome.storage.local.get({ familiarWords: [] });
+    const stored = await chrome.storage.local.get({
+      familiarWords: [],
+      removedFamiliarLemmas: [],
+    });
     const nextFamiliarWords = [...new Set([...stored.familiarWords, lemma])];
-    await chrome.storage.local.set({ familiarWords: nextFamiliarWords });
+    const removedFamiliarLemmas = stored.removedFamiliarLemmas.filter(
+      (removedLemma) => removedLemma !== lemma,
+    );
+    await chrome.storage.local.set({
+      familiarWords: nextFamiliarWords,
+      removedFamiliarLemmas,
+    });
     familiarWords.add(lemma);
     for (const match of document.querySelectorAll(".nbf-potential-word")) {
       if (match.dataset.lemma === lemma) match.replaceWith(match.textContent ?? "");
@@ -216,8 +258,13 @@ async function highlightPotentialWordsOnEnabledSite() {
   const bundledWords = await loadBundledWordList();
   const lexicon = new Set(bundledWords);
   const storedFamiliarWords = await getFamiliarWords(bundledWords);
+  const { removedFamiliarLemmas } = await chrome.storage.local.get({
+    removedFamiliarLemmas: [],
+  });
   const familiarWords = new Set(
-    [...storedFamiliarWords].map((word) => getLemma(word, lexicon)),
+    [...storedFamiliarWords]
+      .map((word) => getLemma(word, lexicon))
+      .filter((lemma) => !removedFamiliarLemmas.includes(lemma)),
   );
   highlightPotentialWordsIn(document.body, familiarWords, lexicon);
   observeDynamicText(familiarWords, lexicon);
