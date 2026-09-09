@@ -112,6 +112,8 @@ type DictionaryConfig = {
   onlineDictionaryUrl?: string;
 };
 
+type VocabBook = Record<string, { definition: string; mastered: boolean }>;
+
 async function readStorage(options: Page) {
   return options.evaluate(async () => {
     const extensionGlobal = globalThis as typeof globalThis & {
@@ -439,4 +441,168 @@ test("shows a clear network failure and still offers retry", async ({ context, e
 
   await retry.click();
   await expect(dialog).toContainText("网络错误，请检查网络连接");
+});
+
+test("collects a word with a valid definition into the vocab book under its lemma", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: { quizzacious: "古怪的" },
+  });
+  await expect(page.locator(".nbf-potential-word")).not.toHaveCount(0);
+
+  await page
+    .locator("#static-copy .nbf-potential-word", { hasText: "Quizzacious" })
+    .first()
+    .hover();
+  const dialog = page.getByRole("dialog", { name: "单词详情" });
+  await expect(dialog).toContainText("古怪的");
+  const collectButton = dialog.getByRole("button", { name: "加入生词本" });
+  await expect(collectButton).toBeEnabled();
+  await collectButton.click();
+  await expect(dialog.getByRole("button", { name: "已加入生词本" })).toBeDisabled();
+
+  const storage = await readStorage(options);
+  const vocabBook = storage.vocabBook as VocabBook;
+  expect(vocabBook).toEqual({ quizzacious: { definition: "古怪的", mastered: false } });
+});
+
+test("disables the collect button and prompts 请先完成翻译 without a definition", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: {},
+  });
+  await page
+    .locator("#static-copy .nbf-potential-word", { hasText: "Quizzacious" })
+    .first()
+    .hover();
+  const dialog = page.getByRole("dialog", { name: "单词详情" });
+  await expect(dialog).toContainText("未找到释义");
+  const collectButton = dialog.getByRole("button", { name: "加入生词本" });
+  await expect(collectButton).toBeDisabled();
+  await expect(dialog.getByText("请先完成翻译")).toBeVisible();
+
+  const storage = await readStorage(options);
+  expect(storage).not.toHaveProperty("vocabBook");
+});
+
+test("prompts 请先完成翻译 when the definition lookup fails", async ({
+  context,
+  extensionId,
+}) => {
+  const { page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: {},
+    onlineDictionaryUrl: "http://network-error.invalid/dictionary",
+  });
+  await page
+    .locator("#static-copy .nbf-potential-word", { hasText: "Quizzacious" })
+    .first()
+    .hover();
+  const dialog = page.getByRole("dialog", { name: "单词详情" });
+  await expect(dialog).toContainText("网络错误，请检查网络连接");
+  await expect(dialog.getByRole("button", { name: "加入生词本" })).toBeDisabled();
+  await expect(dialog.getByText("请先完成翻译")).toBeVisible();
+});
+
+test("stores different word forms as a single vocab book entry by lemma", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: { work: "工作" },
+  });
+  await options.evaluate(async () => {
+    const extensionGlobal = globalThis as typeof globalThis & {
+      chrome: { storage: { local: {
+        get(key: string): Promise<Record<string, unknown>>;
+        set(value: Record<string, unknown>): Promise<void>;
+      } } };
+    };
+    const storage = await extensionGlobal.chrome.storage.local.get("familiarWords");
+    const workForms = new Set(["work", "working", "worked", "works"]);
+    await extensionGlobal.chrome.storage.local.set({
+      familiarWords: (storage.familiarWords as string[]).filter((word) => !workForms.has(word)),
+    });
+  });
+  await page.reload();
+  await expect(page.locator("#word-forms .nbf-potential-word")).toHaveCount(3);
+
+  await page.locator("#word-forms .nbf-potential-word", { hasText: "Working" }).click();
+  const dialog = page.getByRole("dialog", { name: "单词详情" });
+  await expect(dialog).toContainText("按 work 管理");
+  await expect(dialog).toContainText("工作");
+  await dialog.getByRole("button", { name: "加入生词本" }).click();
+
+  const storage = await readStorage(options);
+  const vocabBook = storage.vocabBook as VocabBook;
+  expect(vocabBook).toEqual({ work: { definition: "工作", mastered: false } });
+
+  await page.keyboard.press("Escape");
+  await page.locator("#word-forms .nbf-potential-word", { hasText: "worked" }).click();
+  await expect(page.getByRole("dialog", { name: "单词详情" })).toContainText("按 work 管理");
+  await expect(
+    page.getByRole("dialog", { name: "单词详情" }).getByRole("button", { name: "已加入生词本" }),
+  ).toBeDisabled();
+});
+
+test("does not duplicate or overwrite a collected definition when re-encountered", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: { quizzacious: "古怪的" },
+  });
+  await page
+    .locator("#static-copy .nbf-potential-word", { hasText: "Quizzacious" })
+    .first()
+    .hover();
+  await page
+    .getByRole("dialog", { name: "单词详情" })
+    .getByRole("button", { name: "加入生词本" })
+    .click();
+
+  await options.evaluate(async () => {
+    const extensionGlobal = globalThis as typeof globalThis & {
+      chrome: { storage: { local: { set(value: Record<string, unknown>): Promise<void> } } };
+    };
+    await extensionGlobal.chrome.storage.local.set({
+      localDictionary: { quizzacious: "完全不同的释义" },
+    });
+  });
+
+  await page.keyboard.press("Escape");
+  await page
+    .locator("#static-copy .nbf-potential-word", { hasText: "Quizzacious" })
+    .first()
+    .hover();
+  await expect(
+    page.getByRole("dialog", { name: "单词详情" }).getByRole("button", { name: "已加入生词本" }),
+  ).toBeDisabled();
+
+  const storage = await readStorage(options);
+  const vocabBook = storage.vocabBook as VocabBook;
+  expect(vocabBook).toEqual({ quizzacious: { definition: "古怪的", mastered: false } });
+});
+
+test("marking a word familiar does not create a vocab book entry", async ({
+  context,
+  extensionId,
+}) => {
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId, {
+    localDictionary: { quizzacious: "古怪的" },
+  });
+  await page
+    .locator("#static-copy .nbf-potential-word", { hasText: "Quizzacious" })
+    .first()
+    .click();
+  await page
+    .getByRole("dialog", { name: "单词详情" })
+    .getByRole("button", { name: "认识" })
+    .click();
+
+  const storage = await readStorage(options);
+  expect(storage).not.toHaveProperty("vocabBook");
 });

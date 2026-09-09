@@ -51,8 +51,25 @@
   cursor: pointer;
 }
 
+.nbf-word-popover button:disabled {
+  background: #e8eaed;
+  color: #9aa0a6;
+  cursor: not-allowed;
+}
+
 .nbf-definition-error + button {
   background: #fff;
   color: #1a73e8;
   border: 1px solid #dadce0;
+}
+
+.nbf-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.nbf-collect-hint {
+  margin-top: 8px;
+  color: #9aa0a6;
+  font-size: 12px;
 }

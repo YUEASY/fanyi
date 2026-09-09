@@ -207,6 +207,11 @@ async function getFamiliarWords(bundledWords) {
   return new Set(familiarWords);
 }
 
+async function getVocabBook() {
+  const stored = await chrome.storage.local.get({ vocabBook: {} });
+  return stored.vocabBook;
+}
+
 const DEFAULT_ONLINE_DICTIONARY_URL = "https://api.mymemory.translated.net/get";
 const definitionCache = new Map();
 let localDictionaryPromise = null;
@@ -311,20 +316,26 @@ function renderLoadingDefinition(definitionArea) {
   return loading;
 }
 
-async function renderDefinitionResult(definitionArea, lemma, loading) {
+async function renderDefinitionResult(definitionArea, lemma, loading, onLookupResult) {
   try {
     const definition = await lookupDefinition(lemma);
     if (!definitionArea.isConnected) return;
-    if (definition) loading.textContent = definition;
-    else loading.textContent = "未找到释义";
+    if (definition) {
+      loading.textContent = definition;
+      onLookupResult?.({ state: "resolved", definition });
+    } else {
+      loading.textContent = "未找到释义";
+      onLookupResult?.({ state: "empty" });
+    }
   } catch (error) {
     if (!definitionArea.isConnected) return;
-    renderDefinitionError(definitionArea, lemma, error);
+    renderDefinitionError(definitionArea, lemma, error, onLookupResult);
   }
 }
 
-function renderDefinitionError(definitionArea, lemma, error) {
+function renderDefinitionError(definitionArea, lemma, error, onLookupResult) {
   definitionArea.replaceChildren();
+  onLookupResult?.({ state: "error" });
   const reason = document.createElement("p");
   reason.className = "nbf-definition-error";
   reason.textContent = error?.message ?? "查询失败，请稍后重试";
@@ -333,7 +344,7 @@ function renderDefinitionError(definitionArea, lemma, error) {
   retryButton.textContent = "重试";
   retryButton.addEventListener("click", () => {
     const loading = renderLoadingDefinition(definitionArea);
-    void renderDefinitionResult(definitionArea, lemma, loading);
+    void renderDefinitionResult(definitionArea, lemma, loading, onLookupResult);
   });
   definitionArea.append(reason, retryButton);
 }
@@ -361,6 +372,51 @@ function showWordPopover(marker, familiarWords) {
   const managedAs = document.createElement("p");
   managedAs.className = "nbf-managed-as";
   managedAs.textContent = `按 ${lemma} 管理`;
+
+  let currentDefinition = null;
+  let lookupState = "loading";
+  let alreadyCollected = false;
+
+  const collectButton = document.createElement("button");
+  collectButton.type = "button";
+  collectButton.className = "nbf-collect-button";
+  const collectHint = document.createElement("p");
+  collectHint.className = "nbf-collect-hint";
+
+  function refreshCollectButton() {
+    if (alreadyCollected) {
+      collectButton.textContent = "已加入生词本";
+      collectButton.disabled = true;
+      collectButton.title = "";
+      collectHint.hidden = true;
+    } else if (currentDefinition) {
+      collectButton.textContent = "加入生词本";
+      collectButton.disabled = false;
+      collectButton.title = "";
+      collectHint.hidden = true;
+    } else {
+      collectButton.textContent = "加入生词本";
+      collectButton.disabled = true;
+      collectButton.title = "请先完成翻译";
+      const hasNoDefinition = lookupState === "empty" || lookupState === "error";
+      collectHint.textContent = "请先完成翻译";
+      collectHint.hidden = !hasNoDefinition;
+    }
+  }
+
+  collectButton.addEventListener("click", async () => {
+    // 收录释义在收藏时确定：优先采用已获得的 LLM 结果，否则采用普通词典结果。
+    // LLM 结果将在 issue #8 接入后更新 currentDefinition。
+    const definition = currentDefinition;
+    if (!definition) return;
+    const vocabBook = await getVocabBook();
+    if (vocabBook[lemma]) return;
+    vocabBook[lemma] = { definition, mastered: false };
+    await chrome.storage.local.set({ vocabBook });
+    alreadyCollected = true;
+    refreshCollectButton();
+  });
+
   const familiarButton = document.createElement("button");
   familiarButton.type = "button";
   familiarButton.textContent = "认识";
@@ -375,11 +431,31 @@ function showWordPopover(marker, familiarWords) {
     closeWordPopover();
   });
 
-  popover.append(word, definitionArea, managedAs, familiarButton);
+  const actions = document.createElement("div");
+  actions.className = "nbf-actions";
+  actions.append(familiarButton, collectButton);
+
+  refreshCollectButton();
+  popover.append(word, definitionArea, managedAs, actions, collectHint);
   document.body.append(popover);
   positionPopover(popover, marker);
 
-  void renderDefinitionResult(definitionArea, lemma, definition);
+  void (async () => {
+    const vocabBook = await getVocabBook();
+    if (vocabBook[lemma]) {
+      alreadyCollected = true;
+      refreshCollectButton();
+    }
+    await renderDefinitionResult(definitionArea, lemma, definition, (status) => {
+      if (status.state === "resolved") {
+        lookupState = "resolved";
+        currentDefinition = status.definition;
+      } else {
+        lookupState = status.state;
+      }
+      refreshCollectButton();
+    });
+  })();
 }
 
 function cancelPopoverClose() {
