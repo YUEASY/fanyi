@@ -22,10 +22,20 @@ function shouldScan(textNode) {
   return isVisible(parent);
 }
 
+function getIgnoredRanges(source) {
+  const ignoredPattern =
+    /(?:https?:\/\/|www\.)[^\s<>"']+|\b(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?:\/[^\s<>"']*)?|\b[A-Za-z0-9_']*_[A-Za-z0-9_']*\b|\b(?=[A-Za-z0-9']*[A-Za-z])(?=[A-Za-z0-9']*\d)[A-Za-z0-9']+\b|\b[a-z]+(?:[A-Z][A-Za-z]*)+\b/g;
+  return Array.from(source.matchAll(ignoredPattern), (match) => {
+    const start = match.index ?? 0;
+    return { start, end: start + match[0].length };
+  });
+}
+
 function highlightTextNode(textNode, familiarWords) {
   const source = textNode.nodeValue ?? "";
   const wordPattern = /[A-Za-z]+(?:'[A-Za-z]+)*/g;
   const fragment = document.createDocumentFragment();
+  const ignoredRanges = getIgnoredRanges(source);
   let cursor = 0;
   let hasPotentialWord = false;
 
@@ -34,7 +44,10 @@ function highlightTextNode(textNode, familiarWords) {
     const index = match.index ?? 0;
     fragment.append(source.slice(cursor, index));
 
-    if (familiarWords.has(word.toLowerCase())) {
+    const isIgnored = ignoredRanges.some(
+      (range) => index >= range.start && index < range.end,
+    );
+    if (isIgnored || familiarWords.has(word.toLowerCase())) {
       fragment.append(word);
     } else {
       const marker = document.createElement("span");
@@ -49,6 +62,44 @@ function highlightTextNode(textNode, familiarWords) {
   if (!hasPotentialWord) return;
   fragment.append(source.slice(cursor));
   textNode.replaceWith(fragment);
+}
+
+function getScannableTextNodes(root) {
+  const textNodes = [];
+  if (root.nodeType === Node.TEXT_NODE && shouldScan(root)) textNodes.push(root);
+
+  if (root.nodeType === Node.ELEMENT_NODE || root.nodeType === Node.DOCUMENT_NODE) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      if (shouldScan(walker.currentNode)) textNodes.push(walker.currentNode);
+    }
+  }
+  return textNodes;
+}
+
+function highlightPotentialWordsIn(root, familiarWords) {
+  for (const textNode of getScannableTextNodes(root)) {
+    highlightTextNode(textNode, familiarWords);
+  }
+}
+
+function observeDynamicText(familiarWords) {
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      if (mutation.type === "characterData") {
+        highlightPotentialWordsIn(mutation.target, familiarWords);
+        continue;
+      }
+      for (const node of mutation.addedNodes) {
+        highlightPotentialWordsIn(node, familiarWords);
+      }
+    }
+  });
+  observer.observe(document.body, {
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
 }
 
 async function loadInitialFamiliarWords() {
@@ -81,12 +132,8 @@ async function highlightPotentialWordsOnEnabledSite() {
   if (!enabledHosts.includes(location.hostname.toLowerCase())) return;
 
   const familiarWords = await getFamiliarWords();
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  const textNodes = [];
-  while (walker.nextNode()) {
-    if (shouldScan(walker.currentNode)) textNodes.push(walker.currentNode);
-  }
-  for (const textNode of textNodes) highlightTextNode(textNode, familiarWords);
+  highlightPotentialWordsIn(document.body, familiarWords);
+  observeDynamicText(familiarWords);
 }
 
 void highlightPotentialWordsOnEnabledSite();

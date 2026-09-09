@@ -46,10 +46,22 @@ test.beforeAll(async () => {
   server = createServer((_request, response) => {
     response.setHeader("content-type", "text/html; charset=utf-8");
     response.end(`<!doctype html><html><body>
-      <main>Developers orchestrate deterministic workflows.</main>
+      <main>
+        <p id="static-copy">Quizzacious Quizzacious HTTP DeepSeek</p>
+        <p id="identifiers">12345 https://example.com/quizzacious useState foo_bar user123</p>
+        <div id="dynamic-copy"></div>
+        <p id="dynamic-update">the</p>
+      </main>
+      <code>Codeword should remain untouched.</code>
       <pre>Infrastructure should remain untouched.</pre>
+      <script>const Scriptword = true;</script>
+      <style>.Styleword { color: red; }</style>
+      <input value="Inputword" />
+      <textarea>Textareaword</textarea>
       <p hidden>Invisible vocabulary stays hidden.</p>
       <p style="opacity: 0">Transparent vocabulary stays hidden.</p>
+      <p style="display: none">Collapsed vocabulary stays hidden.</p>
+      <p style="visibility: hidden">Concealed vocabulary stays hidden.</p>
     </body></html>`);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -83,8 +95,48 @@ test("enables only the entered full hostname and keeps it after reload", async (
     "rgb(230, 200, 79)",
   );
   await expect(enabled.locator("pre .nbf-potential-word")).toHaveCount(0);
+  await expect(enabled.locator("code .nbf-potential-word")).toHaveCount(0);
+  await expect(enabled.locator("script .nbf-potential-word")).toHaveCount(0);
+  await expect(enabled.locator("style .nbf-potential-word")).toHaveCount(0);
+  await expect(enabled.locator("input .nbf-potential-word")).toHaveCount(0);
+  await expect(enabled.locator("textarea .nbf-potential-word")).toHaveCount(0);
   await expect(enabled.locator("[hidden] .nbf-potential-word")).toHaveCount(0);
   await expect(enabled.locator('[style="opacity: 0"] .nbf-potential-word')).toHaveCount(0);
+  await expect(enabled.locator('[style="display: none"] .nbf-potential-word')).toHaveCount(0);
+  await expect(enabled.locator('[style="visibility: hidden"] .nbf-potential-word')).toHaveCount(0);
+
+  await expect(
+    enabled.locator("#static-copy .nbf-potential-word", { hasText: "Quizzacious" }),
+  ).toHaveCount(2);
+  await expect(enabled.locator("#static-copy .nbf-potential-word", { hasText: "HTTP" })).toHaveCount(1);
+  await expect(
+    enabled.locator("#static-copy .nbf-potential-word", { hasText: "DeepSeek" }),
+  ).toHaveCount(1);
+  await expect(enabled.locator("#identifiers .nbf-potential-word")).toHaveCount(0);
+
+  await enabled.locator("#dynamic-copy").evaluate((element) => {
+    element.textContent = "Dynamically Quizzacious";
+  });
+  await expect(
+    enabled.locator("#dynamic-copy .nbf-potential-word", { hasText: "Dynamically" }),
+  ).toHaveCount(1);
+  await enabled.locator("#dynamic-update").evaluate((element) => {
+    if (!element.firstChild) throw new Error("dynamic update fixture has no text node");
+    element.firstChild.nodeValue = "Quizzacious";
+  });
+  await expect(enabled.locator("#dynamic-update .nbf-potential-word")).toHaveText(
+    "Quizzacious",
+  );
+
+  const storage = await options.evaluate(async () => {
+    const extensionGlobal = globalThis as typeof globalThis & {
+      chrome: { storage: { local: { get(): Promise<Record<string, unknown>> } } };
+    };
+    return extensionGlobal.chrome.storage.local.get();
+  });
+  expect(storage).not.toHaveProperty("potentialWords");
+  const familiarWords = storage.familiarWords as string[];
+  expect(new Set(familiarWords).size).toBe(familiarWords.length);
 
   await enabled.reload();
   await expect(enabled.locator(".nbf-potential-word")).not.toHaveCount(0);
