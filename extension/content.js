@@ -3,29 +3,40 @@ const EXCLUDED_SELECTOR =
 
 function getLemma(word, lexicon) {
   const lowerWord = word.toLowerCase();
-  const candidates = new Set();
-  const addCandidate = (candidate) => {
-    if (candidate !== lowerWord && lexicon.has(candidate)) candidates.add(candidate);
-  };
+  const uninflectedWords = new Set(["news"]);
+  if (uninflectedWords.has(lowerWord)) return lowerWord;
 
   if (lowerWord.endsWith("ies") && lowerWord.length > 3) {
-    addCandidate(`${lowerWord.slice(0, -3)}y`);
-  } else if (lowerWord.endsWith("es") && lowerWord.length > 2) {
-    addCandidate(lowerWord.slice(0, -2));
-    addCandidate(lowerWord.slice(0, -1));
-  } else if (lowerWord.endsWith("s") && !lowerWord.endsWith("ss")) {
-    addCandidate(lowerWord.slice(0, -1));
+    const candidate = `${lowerWord.slice(0, -3)}y`;
+    if (lexicon.has(candidate)) return candidate;
+  }
+  if (lowerWord.endsWith("es") && lowerWord.length > 2) {
+    const withoutS = lowerWord.slice(0, -1);
+    if (lexicon.has(withoutS)) return withoutS;
+    if (/(?:ches|shes|xes|zes|oes)$/u.test(lowerWord)) {
+      const withoutEs = lowerWord.slice(0, -2);
+      if (lexicon.has(withoutEs)) return withoutEs;
+    }
+  }
+  if (lowerWord.endsWith("s") && !lowerWord.endsWith("ss")) {
+    const candidate = lowerWord.slice(0, -1);
+    if (lexicon.has(candidate)) return candidate;
   }
 
   for (const suffix of ["ing", "ed"]) {
     if (!lowerWord.endsWith(suffix) || lowerWord.length <= suffix.length) continue;
     const stem = lowerWord.slice(0, -suffix.length);
-    addCandidate(stem);
-    addCandidate(`${stem}e`);
-    if (stem.length > 2 && stem.at(-1) === stem.at(-2)) addCandidate(stem.slice(0, -1));
+    if (stem.length > 2 && stem.at(-1) === stem.at(-2)) {
+      const withoutDouble = stem.slice(0, -1);
+      if (lexicon.has(withoutDouble)) return withoutDouble;
+    }
+    const withE = `${stem}e`;
+    if (lexicon.has(withE) && /[csvzg]$/u.test(stem)) return withE;
+    if (lexicon.has(stem)) return stem;
+    if (lexicon.has(withE)) return withE;
   }
 
-  return candidates.size === 1 ? candidates.values().next().value : lowerWord;
+  return lowerWord;
 }
 
 function isVisible(element) {
@@ -131,7 +142,7 @@ function observeDynamicText(familiarWords, lexicon) {
   });
 }
 
-async function loadProjectWords() {
+async function loadBundledWordList() {
   const response = await fetch(chrome.runtime.getURL("google-10000-english.txt"));
   if (!response.ok) throw new Error("无法加载初始熟词表");
   return (await response.text())
@@ -140,14 +151,14 @@ async function loadProjectWords() {
     .filter(Boolean);
 }
 
-async function getFamiliarWords(projectWords) {
+async function getFamiliarWords(bundledWords) {
   const stored = await chrome.storage.local.get({
     familiarWordsInitialized: false,
     familiarWords: [],
   });
   if (stored.familiarWordsInitialized) return new Set(stored.familiarWords);
 
-  const familiarWords = projectWords.slice(0, 1500);
+  const familiarWords = bundledWords.slice(0, 1500);
   await chrome.storage.local.set({
     familiarWords,
     familiarWordsInitialized: true,
@@ -195,9 +206,9 @@ async function highlightPotentialWordsOnEnabledSite() {
   const { enabledHosts } = await chrome.storage.local.get({ enabledHosts: [] });
   if (!enabledHosts.includes(location.hostname.toLowerCase())) return;
 
-  const projectWords = await loadProjectWords();
-  const lexicon = new Set(projectWords);
-  const storedFamiliarWords = await getFamiliarWords(projectWords);
+  const bundledWords = await loadBundledWordList();
+  const lexicon = new Set(bundledWords);
+  const storedFamiliarWords = await getFamiliarWords(bundledWords);
   const familiarWords = new Set(
     [...storedFamiliarWords].map((word) => getLemma(word, lexicon)),
   );

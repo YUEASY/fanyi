@@ -2,6 +2,9 @@ const form = document.querySelector("#site-form");
 const input = document.querySelector("#site-url");
 const error = document.querySelector("#error");
 const list = document.querySelector("#enabled-hosts");
+const familiarSearch = document.querySelector("#familiar-search");
+const familiarList = document.querySelector("#familiar-words");
+let familiarWords = [];
 
 async function getEnabledHosts() {
   const stored = await chrome.storage.local.get({ enabledHosts: [] });
@@ -40,3 +43,35 @@ form.addEventListener("submit", async (event) => {
 });
 
 void getEnabledHosts().then(renderEnabledHosts);
+
+function renderFamiliarWords() {
+  const query = familiarSearch.value.trim().toLowerCase();
+  const visibleWords = familiarWords.filter((word) => word.includes(query));
+  familiarList.replaceChildren(
+    ...visibleWords.map((word) => {
+      const item = document.createElement("li");
+      const label = document.createElement("span");
+      label.textContent = word;
+      const removeButton = document.createElement("button");
+      removeButton.type = "button";
+      removeButton.textContent = "移除";
+      removeButton.setAttribute("aria-label", `移除 ${word}`);
+      removeButton.addEventListener("click", async () => {
+        familiarWords = familiarWords.filter((candidate) => candidate !== word);
+        await chrome.storage.local.set({ familiarWords });
+        renderFamiliarWords();
+      });
+      item.append(label, removeButton);
+      return item;
+    }),
+  );
+}
+
+async function loadFamiliarWords() {
+  const stored = await chrome.storage.local.get({ familiarWords: [] });
+  familiarWords = stored.familiarWords;
+  renderFamiliarWords();
+}
+
+familiarSearch.addEventListener("input", renderFamiliarWords);
+void loadFamiliarWords();

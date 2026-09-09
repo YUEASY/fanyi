@@ -49,6 +49,7 @@ test.beforeAll(async () => {
       <main>
         <p id="static-copy">Quizzacious Quizzacious HTTP DeepSeek</p>
         <p id="word-forms">Working worked works</p>
+        <p id="ambiguous-forms">Use uses News new</p>
         <p id="identifiers">12345 https://example.com/quizzacious useState foo_bar user123</p>
         <div id="dynamic-copy"></div>
         <p id="dynamic-update">the</p>
@@ -76,6 +77,16 @@ test.afterAll(async () => {
     server.close((error) => (error ? reject(error) : resolve())),
   );
 });
+
+async function enableDocsHostAndOpenPage(context: BrowserContext, extensionId: string) {
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/options.html`);
+  await options.getByLabel("页面网址").fill(`http://docs.localhost:${port}/guide`);
+  await options.getByRole("button", { name: "启用网站" }).click();
+  const page = await context.newPage();
+  await page.goto(`http://docs.localhost:${port}/guide`);
+  return { options, page };
+}
 
 test("enables only the entered full hostname and keeps it after reload", async ({
   context,
@@ -163,28 +174,16 @@ test("initializes familiar words once and does not restore a removed seed word",
   extensionId,
   userDataDir,
 }) => {
-  const options = await context.newPage();
-  await options.goto(`chrome-extension://${extensionId}/options.html`);
-  await options.getByLabel("页面网址").fill(`http://docs.localhost:${port}/guide`);
-  await options.getByRole("button", { name: "启用网站" }).click();
-
-  const page = await context.newPage();
-  await page.goto(`http://docs.localhost:${port}/guide`);
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId);
   await expect(page.locator(".nbf-potential-word")).not.toHaveCount(0);
   await expect(page.locator("#dynamic-update .nbf-potential-word")).toHaveCount(0);
 
   const initialized = await options.evaluate(async () => {
     const extensionGlobal = globalThis as typeof globalThis & {
-      chrome: { storage: { local: {
-        get(): Promise<Record<string, unknown>>;
-        set(value: Record<string, unknown>): Promise<void>;
-      } } };
+      chrome: { storage: { local: { get(): Promise<Record<string, unknown>> } } };
     };
     const storage = await extensionGlobal.chrome.storage.local.get();
     const familiarWords = storage.familiarWords as string[];
-    await extensionGlobal.chrome.storage.local.set({
-      familiarWords: familiarWords.filter((word) => word !== "the"),
-    });
     return {
       count: familiarWords.length,
       initialized: storage.familiarWordsInitialized,
@@ -192,6 +191,12 @@ test("initializes familiar words once and does not restore a removed seed word",
     };
   });
   expect(initialized).toEqual({ count: 1500, initialized: true, containsThe: true });
+  await options.reload();
+  await options.getByLabel("搜索熟词").fill("the");
+  const familiarList = options.getByRole("list", { name: "熟词表" });
+  await expect(familiarList.getByText("the", { exact: true })).toBeVisible();
+  await familiarList.getByRole("button", { name: "移除 the", exact: true }).click();
+  await expect(familiarList.getByText("the", { exact: true })).toHaveCount(0);
 
   await context.close();
   const reloadedContext = await launchExtension(userDataDir);
@@ -207,13 +212,7 @@ test("marks a reliable lemma as familiar from its word popover", async ({
   context,
   extensionId,
 }) => {
-  const options = await context.newPage();
-  await options.goto(`chrome-extension://${extensionId}/options.html`);
-  await options.getByLabel("页面网址").fill(`http://docs.localhost:${port}/guide`);
-  await options.getByRole("button", { name: "启用网站" }).click();
-
-  const page = await context.newPage();
-  await page.goto(`http://docs.localhost:${port}/guide`);
+  const { options, page } = await enableDocsHostAndOpenPage(context, extensionId);
   await expect(page.locator(".nbf-potential-word")).not.toHaveCount(0);
   await options.evaluate(async () => {
     const extensionGlobal = globalThis as typeof globalThis & {
@@ -223,7 +222,10 @@ test("marks a reliable lemma as familiar from its word popover", async ({
       } } };
     };
     const storage = await extensionGlobal.chrome.storage.local.get("familiarWords");
-    const workForms = new Set(["work", "working", "worked", "works"]);
+    const workForms = new Set([
+      "work", "working", "worked", "works",
+      "use", "uses", "used", "using", "us", "news", "new",
+    ]);
     await extensionGlobal.chrome.storage.local.set({
       familiarWords: (storage.familiarWords as string[]).filter((word) => !workForms.has(word)),
     });
@@ -249,4 +251,9 @@ test("marks a reliable lemma as familiar from its word popover", async ({
   await expect(forms).toHaveCount(0);
   await page.reload();
   await expect(page.locator("#word-forms .nbf-potential-word")).toHaveCount(0);
+
+  await page.locator("#ambiguous-forms .nbf-potential-word", { hasText: "uses" }).click();
+  await expect(page.getByRole("dialog", { name: "单词详情" })).toContainText("按 use 管理");
+  await page.locator("#ambiguous-forms .nbf-potential-word", { hasText: "News" }).click();
+  await expect(page.getByRole("dialog", { name: "单词详情" })).toContainText("按 news 管理");
 });

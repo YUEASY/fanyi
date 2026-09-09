@@ -16,9 +16,14 @@ main {
   padding: 24px;
 }
 
-h1 {
+h1,
+h2 {
   font-size: 20px;
   margin-top: 0;
+}
+
+section {
+  margin-top: 28px;
 }
 
 label {
@@ -54,4 +59,22 @@ button {
 
 #enabled-hosts {
   padding-left: 20px;
+}
+
+#familiar-search {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+#familiar-words {
+  max-height: 320px;
+  overflow: auto;
+  padding: 0;
+}
+
+#familiar-words li {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
 }
